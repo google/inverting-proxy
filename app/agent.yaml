@@ -1,0 +1,10 @@
+runtime: go
+api_version: go1
+service: agent
+
+handlers:
+  - url: /agent/.*
+    secure: always
+    script: _go_app
+
+

@@ -1,0 +1,12 @@
+runtime: go
+api_version: go1
+service: api
+
+handlers:
+  - url: /api/.*
+    secure: always
+    script: _go_app
+  - url: /cron/.*
+    secure: always
+    login: admin
+    script: _go_app

@@ -1,0 +1,5 @@
+cron:
+  - description: Delete old requests
+    url: /cron/delete
+    target: api
+    schedule: every 5 mins
