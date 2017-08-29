@@ -116,7 +116,7 @@ func TestParseRequestFromProxyResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if forwardedRequest.BackendID != "some-backend" || forwardedRequest.RequestID != "some-request" || forwardedRequest.User != "someone" || forwardedRequest.StartTime != mockStartTime {
+	if forwardedRequest.BackendID != "some-backend" || forwardedRequest.RequestID != "some-request" || forwardedRequest.User != "someone" || !(forwardedRequest.StartTime.Equal(mockStartTime)) {
 		t.Fatal("Unexpected request parsed from a proxy response")
 	}
 }
