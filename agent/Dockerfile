@@ -19,9 +19,10 @@ RUN apt-get update && apt-get upgrade -y && \
       ca-certificates \
       git \
       wget && \
-    mkdir -p /opt/bin
+    mkdir -p /opt/bin && \
+    mkdir -p /opt/src/github.com/google/inverting-proxy
 
-ADD ./ /src
+ADD ./ /opt/src/github.com/google/inverting-proxy/agent
 
 RUN wget -O /opt/go1.6.2.linux-amd64.tar.gz \
       https://storage.googleapis.com/golang/go1.6.2.linux-amd64.tar.gz && \
@@ -32,7 +33,7 @@ RUN wget -O /opt/go1.6.2.linux-amd64.tar.gz \
     go get golang.org/x/net/context && \
     go get golang.org/x/oauth2/google && \
     go get google.golang.org/api/compute/v1 && \
-    go build -o ${GOPATH}/bin/proxy-forwarding-agent /src/agent.go && \
+    go build -o ${GOPATH}/bin/proxy-forwarding-agent /opt/src/github.com/google/inverting-proxy/agent/agent.go && \
     rm -rf /opt/go1.4.2.linux-amd64.tar.gz && \
     rm -rf /usr/local
 

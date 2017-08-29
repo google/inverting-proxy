@@ -39,7 +39,7 @@ import (
 	"golang.org/x/oauth2/google"
 	compute "google.golang.org/api/compute/v1"
 
-	"./utils"
+	"github.com/google/inverting-proxy/agent/utils"
 )
 
 const (
