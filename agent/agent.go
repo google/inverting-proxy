@@ -104,7 +104,7 @@ func pollForNewRequests(client *http.Client, backendID string) {
 		if requests, err := utils.ListPendingRequests(client, *proxy, backendID); err != nil {
 			log.Printf("Failed to read pending requests: %q\n", err.Error())
 			time.Sleep(exponentialBackoffDuration(retryCount))
-			retryCount += 1
+			retryCount++
 		} else {
 			retryCount = 0
 			for _, requestID := range requests {

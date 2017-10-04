@@ -24,17 +24,38 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
+	"sync"
 	"time"
+
+	"cloud.google.com/go/compute/metadata"
 )
 
 const (
-	PendingPath  = "agent/pending"
-	RequestPath  = "agent/request"
+	// PendingPath is the URL subpath for pending requests held by the proxy.
+	PendingPath = "agent/pending"
+
+	// RequestPath is the URL subpath for reading a specific request held by the proxy.
+	RequestPath = "agent/request"
+
+	// ResponsePath is the URL subpath for posting a request response to the proxy.
 	ResponsePath = "agent/response"
 
-	HeaderUserID           = "X-Inverting-Proxy-User-ID"
-	HeaderBackendID        = "X-Inverting-Proxy-Backend-ID"
-	HeaderRequestID        = "X-Inverting-Proxy-Request-ID"
+	// HeaderUserID is the name of a response header used by the proxy to identify the end user.
+	HeaderUserID = "X-Inverting-Proxy-User-ID"
+
+	// HeaderBackendID is the name of a request header used to uniquely identify this agent.
+	HeaderBackendID = "X-Inverting-Proxy-Backend-ID"
+
+	// HeaderVMID is the name of a request header used to report the VM
+	// (if any) on which the agent is running.
+	HeaderVMID = "X-Inverting-Proxy-VM-ID"
+
+	// HeaderRequestID is the name of a request/response header used to uniquely
+	// identify a proxied request.
+	HeaderRequestID = "X-Inverting-Proxy-Request-ID"
+
+	// HeaderRequestStartTime is the name of a response header used by the proxy
+	// to report the start time of a proxied request.
 	HeaderRequestStartTime = "X-Inverting-Proxy-Request-Start-Time"
 )
 
@@ -103,6 +124,47 @@ func parseRequestIDs(response *http.Response) ([]string, error) {
 	return requests, nil
 }
 
+var (
+	hasVMIDOnce sync.Once
+	hasVMID     bool
+)
+
+func hasVMServiceAccount() bool {
+	if !metadata.OnGCE() {
+		return false
+	}
+
+	if _, err := metadata.Get("instance/service-accounts/default/email"); err != nil {
+		return false
+	}
+	return true
+}
+
+func checkVMID() {
+	// VM Identity requires a service account.
+	hasVMID = hasVMServiceAccount()
+}
+
+// addVMIDHeader adds a header to the given request identifying the VM (if any) on which the agent is running.
+//
+// This method relies on the Google Compute Engine functionality for verifying a VM's identity
+// (https://cloud.google.com/compute/docs/instances/verifying-instance-identity), so it does
+// nothing if the agent is not running inside of a Google Compute Engine VM.
+func addVMIDHeader(proxyURL string, req *http.Request) error {
+	hasVMIDOnce.Do(checkVMID)
+	if !hasVMID {
+		return nil
+	}
+
+	idPath := fmt.Sprintf("instance/service-accounts/default/identity?format=full&audience=%s", proxyURL)
+	vmID, err := metadata.Get(idPath)
+	if err != nil {
+		return err
+	}
+	req.Header.Add(HeaderVMID, vmID)
+	return nil
+}
+
 // ListPendingRequests issues a single request to the proxy to ask for the IDs of pending requests.
 func ListPendingRequests(client *http.Client, proxyHost, backendID string) ([]string, error) {
 	proxyURL := proxyHost + PendingPath
@@ -111,6 +173,9 @@ func ListPendingRequests(client *http.Client, proxyHost, backendID string) ([]st
 		return nil, err
 	}
 	proxyReq.Header.Add(HeaderBackendID, backendID)
+	if err := addVMIDHeader(proxyURL, proxyReq); err != nil {
+		return nil, fmt.Errorf("Failure adding the VM ID header to a proxy request: %q", err.Error())
+	}
 	proxyResp, err := client.Do(proxyReq)
 	if err != nil {
 		return nil, fmt.Errorf("A proxy request failed: %q", err.Error())
@@ -156,6 +221,9 @@ func ReadRequest(client *http.Client, proxyHost, backendID, requestID string, ca
 	}
 	proxyReq.Header.Add(HeaderBackendID, backendID)
 	proxyReq.Header.Add(HeaderRequestID, requestID)
+	if err := addVMIDHeader(proxyURL, proxyReq); err != nil {
+		return fmt.Errorf("Failure adding the VM ID header to a proxy request: %q", err.Error())
+	}
 	proxyResp, err := client.Do(proxyReq)
 	if err != nil {
 		return fmt.Errorf("A proxy request failed: %q", err.Error())
@@ -216,6 +284,9 @@ func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID s
 	}
 	proxyReq.Header.Set(HeaderBackendID, backendID)
 	proxyReq.Header.Set(HeaderRequestID, requestID)
+	if err := addVMIDHeader(proxyURL, proxyReq); err != nil {
+		return nil, fmt.Errorf("Failure adding the VM ID header to a proxy request: %q", err.Error())
+	}
 	proxyReq.Header.Set("Content-Type", "text/plain")
 
 	errChan := make(chan error, 100)
@@ -275,10 +346,12 @@ func (rf *ResponseForwarder) notify() {
 	}
 }
 
+// Header implements the http.ResponseWriter interface.
 func (rf *ResponseForwarder) Header() http.Header {
 	return rf.response.Header
 }
 
+// Write implements the http.ResponseWriter interface.
 func (rf *ResponseForwarder) Write(buf []byte) (int, error) {
 	// As in net/http, call WriteHeader if it has not yet been called
 	// before the first call to Write.
@@ -293,6 +366,7 @@ func (rf *ResponseForwarder) Write(buf []byte) (int, error) {
 	return count, err
 }
 
+// WriteHeader implements the http.ResponseWriter interface.
 func (rf *ResponseForwarder) WriteHeader(code int) {
 	// As in net/http, ignore multiple calls to WriteHeader.
 	if rf.wroteHeader {
@@ -329,6 +403,9 @@ func (rf *ResponseForwarder) WriteHeader(code int) {
 	}()
 }
 
+// Close signals that the response has been fully read from the backend server,
+// waits for that response to be forwarded to the proxy, and then reports any
+// errors that occured while forwarding the response.
 func (rf *ResponseForwarder) Close() error {
 	rf.notify()
 	var errs []error
