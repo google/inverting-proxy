@@ -28,10 +28,12 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/golang/groupcache/lru"
@@ -50,11 +52,14 @@ const (
 )
 
 var (
-	proxy         = flag.String("proxy", "", "URL (including scheme) of the inverting proxy")
-	host          = flag.String("host", "localhost:8080", "Hostname (including port) of the backend server")
-	backendID     = flag.String("backend", "", "Unique ID for this backend.")
-	debug         = flag.Bool("debug", false, "Whether or not to print debug log messages")
-	forwardUserID = flag.Bool("forward-user-id", false, "Whether or not to include the ID (email address) of the end user in requests to the backend")
+	proxy                = flag.String("proxy", "", "URL (including scheme) of the inverting proxy")
+	host                 = flag.String("host", "localhost:8080", "Hostname (including port) of the backend server")
+	backendID            = flag.String("backend", "", "Unique ID for this backend.")
+	debug                = flag.Bool("debug", false, "Whether or not to print debug log messages")
+	forwardUserID        = flag.Bool("forward-user-id", false, "Whether or not to include the ID (email address) of the end user in requests to the backend")
+	healthCheckPath      = flag.String("health-check-path", "/", "Path on backend host to issue health checks against.  Defaults to the root.")
+	healthCheckFreq      = flag.Int("health-check-interval-seconds", 0, "Wait time in seconds between health checks.  Set to zero to disable health checks.  Checks disabled by default.")
+	healthCheckUnhealthy = flag.Int("health-check-unhealthy-threshold", 2, "A so-far healthy backend will be marked unhealthy after this many consecutive failures. The minimum value is 1.")
 )
 
 // forwardRequest forwards the given request from the proxy to
@@ -78,6 +83,21 @@ func forwardRequest(client *http.Client, request *utils.ForwardedRequest) error 
 		log.Printf("Backend latency for request %s: %s\n", request.RequestID, time.Since(request.StartTime).String())
 	}
 	return responseForwarder.Close()
+}
+
+// healthCheck issues a health check against the backend server
+// and returns the result.
+func healthCheck() error {
+	resp, err := http.Get("http://" + *host + *healthCheckPath)
+	if err != nil {
+		log.Printf("Health Check request failed: %s", err.Error())
+		return err
+	}
+	if resp.StatusCode != 200 {
+		log.Printf("Health Check request had non-200 status code: %d", resp.StatusCode)
+		return fmt.Errorf("Bad Health Check Response Code: %s", resp.Status)
+	}
+	return nil
 }
 
 // processOneRequest reads a single request from the proxy and forwards it to the backend server.
@@ -126,6 +146,51 @@ func getGoogleClient(ctx context.Context) (*http.Client, error) {
 	return google.DefaultClient(ctx, compute.CloudPlatformScope, emailScope)
 }
 
+// waitForHealthy runs health checks against the backend and returns
+// the first time it sees a healthy check.
+func waitForHealthy() {
+	if *healthCheckFreq <= 0 {
+		return
+	}
+	if healthCheck() == nil {
+		return
+	}
+	ticker := time.NewTicker(time.Duration(*healthCheckFreq) * time.Second)
+	for _ = range ticker.C {
+		if healthCheck() == nil {
+			ticker.Stop()
+			return
+		}
+	}
+}
+
+// runHealthChecks runs health checks against the backend and shuts down
+// the proxy if the backend is unhealthy.
+func runHealthChecks() {
+	if *healthCheckFreq <= 0 {
+		return
+	}
+	if *healthCheckUnhealthy < 1 {
+		*healthCheckUnhealthy = 1
+	}
+	// Always start in the unhealthy state, but only require a single positive
+	// health check to become healthy for the first time, and do the first check
+	// immediately.
+	ticker := time.NewTicker(time.Duration(*healthCheckFreq) * time.Second)
+	badHealthChecks := 0
+	for _ = range ticker.C {
+		if healthCheck() != nil {
+			badHealthChecks++
+		} else {
+			badHealthChecks = 0
+		}
+		if badHealthChecks >= *healthCheckUnhealthy {
+			ticker.Stop()
+			log.Fatal("Too many unhealthy checks")
+		}
+	}
+}
+
 // runAdapter sets up the HTTP client for the agent to use (including OAuth credentials),
 // and then does the actual work of forwarding requests and responses.
 func runAdapter() error {
@@ -149,6 +214,12 @@ func main() {
 	if *backendID == "" {
 		log.Fatal("You must specify a backend ID")
 	}
+	if !strings.HasPrefix(*healthCheckPath, "/") {
+		*healthCheckPath = "/" + *healthCheckPath
+	}
+
+	waitForHealthy()
+	go runHealthChecks()
 
 	if err := runAdapter(); err != nil {
 		log.Fatal(err.Error())
