@@ -41,5 +41,8 @@ ENV PROXY ""
 ENV BACKEND ""
 ENV HOSTNAME "localhost"
 ENV PORT "8080"
+ENV HEALTH_CHECK_PATH "/"
+ENV HEALTH_CHECK_INTERVAL_SECONDS "0"
+ENV HEALTH_CHECK_UNHEALTHY_THRESHOLD "2"
 
-CMD ["/bin/sh", "-c", "/opt/bin/proxy-forwarding-agent --proxy=${PROXY} --backend=${BACKEND} --host=${HOSTNAME}:${PORT}"]
+CMD ["/bin/sh", "-c", "/opt/bin/proxy-forwarding-agent --proxy=${PROXY} --backend=${BACKEND} --host=${HOSTNAME}:${PORT} --health-check-path=${HEALTH_CHECK_PATH} --health-check-interval-seconds=${HEALTH_CHECK_INTERVAL_SECONDS} --health-check-unhealthy-threshold=${HEALTH_CHECK_UNHEALTHY_THRESHOLD}" ]
