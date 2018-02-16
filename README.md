@@ -109,6 +109,85 @@ backend match the responses to the client.
 The forwarding agent is standalone binary written in Go and its source code
 is under the 'agent' subdirectory.
 
+## Usage
+
+### Prerequisites
+
+First, [create a Google Cloud Platform project](https://console.cloud.google.com)
+that will host your proxy, and ensure that you have the Google
+[Cloud SDK](https://cloud.google.com/sdk/) installed on your machine.
+
+### Setup
+
+Save the ID of your project in the environment variable `PROJECT_ID`, and then
+run the command
+
+```sh
+make deploy
+```
+
+This will deploy 3 App Engine services to your project (one for the proxy,
+one for agents to contact, and one that implements an API for managing
+proxy endpoints).
+
+### Registering Backends
+
+Before you can connect a backend server to your proxy, you must use the proxy's
+admin API to create a record of that backend. This is just a simple HTTP
+REST API with create, list, and delete operations. There is no client tool
+provided for the admin API, but you can access it using `curl`.
+
+To list the current backends:
+
+```sh
+curl -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+    https://api-dot-${PROJECT_ID}.appspot.com/api/backends
+```
+
+To create a backend:
+
+```sh
+curl -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+    -d "${BACKEND_RECORD}" \
+    https://api-dot-${PROJECT_ID}.appspot.com/api/backends
+```
+
+... where "${BACKEND_RECORD}" is a JSON object with the following fields:
+
+* id: An arbitary name for the backend
+* endUser: The email address of the end user connecting to that backend.
+  The email address must be for a Google account.
+  Alternatively, you can use the special string "allUsers" to make your server public.
+* backendUser: The email address of account running the agent.
+  This should be the account listed as "active" when you run `gcloud auth list`
+  on the machine where the agent runs.
+* pathPrefixes: This specifies the list of URL paths served by the backend.
+  To match all request, use `["/"]`.
+
+Finally, to delete a backend:
+
+```sh
+curl -X DELETE \
+    -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+    https://api-dot-${PROJECT_ID}.appspot.com/api/backends/${BACKEND_ID}
+```
+
+### Running Backends
+
+Once you have created the record for your backend using the API, you can
+run the agent alongside your server with the following command:
+
+```sh
+docker run --net=host --rm -it \
+    -v "${HOME}/.config:/root/.config" \
+    --env="PORT=${PORT}" \
+    --env="BACKEND=${BACKEND_ID}" \
+    --env="PROXY=https://agent-dot-${PROJECT_ID}.appspot.com/" \
+    gcr.io/inverting-proxy/agent
+```
+
+And then you can access your backend by vising https://${PROJECT_ID}.appspot.com
+
 ## Limitations
 
 Currently, the inverting proxy only supports HTTP requests. In particular,
