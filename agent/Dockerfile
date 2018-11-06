@@ -22,7 +22,7 @@ RUN apt-get update && apt-get upgrade -y && \
     mkdir -p /opt/bin && \
     mkdir -p /opt/src/github.com/google/inverting-proxy
 
-ADD ./ /opt/src/github.com/google/inverting-proxy/agent
+ADD ./ /opt/src/github.com/google/inverting-proxy
 
 RUN wget -O /opt/go1.11.1.linux-amd64.tar.gz \
       https://storage.googleapis.com/golang/go1.11.1.linux-amd64.tar.gz && \
