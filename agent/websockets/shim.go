@@ -27,19 +27,19 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"path"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"text/template"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"golang.org/x/net/context"
 )
 
 const (
-	contentTypeHeader     = "Content-Type"
-	websocketShimTemplate = `
+	contentTypeHeader = "Content-Type"
+	shimTemplate      = `
 <!--START_WEBSOCKET_SHIM-->
 <!--
     This file was served from behind a reverse proxy that does not support websockets.
@@ -171,7 +171,7 @@ const (
 `
 )
 
-var websocketShimTmpl = template.Must(template.New("client-shim").Parse(websocketShimTemplate))
+var shimTmpl = template.Must(template.New("client-shim").Parse(shimTemplate))
 
 type shimmedBody struct {
 	reader io.Reader
@@ -186,7 +186,7 @@ func (sb *shimmedBody) Close() error {
 	return sb.closer.Close()
 }
 
-func shimBody(resp *http.Response, webSocketShim string) error {
+func shimBody(resp *http.Response, shimCode string) error {
 	if resp == nil || resp.Body == nil {
 		// We have nothing to do on an empty response
 		return nil
@@ -204,91 +204,10 @@ func shimBody(resp *http.Response, webSocketShim string) error {
 	if err != nil && err != io.EOF {
 		return err
 	}
-	prefix := strings.Replace(string(buf[0:count]), "<head>", "<head>"+webSocketShim, 1)
+	prefix := strings.Replace(string(buf[0:count]), "<head>", "<head>"+shimCode, 1)
 	resp.Body = &shimmedBody{
 		reader: io.MultiReader(strings.NewReader(prefix), wrapped),
 		closer: wrapped,
-	}
-	return nil
-}
-
-type websocketConnection struct {
-	ctx            context.Context
-	cancel         context.CancelFunc
-	clientMessages chan string
-	ServerMessages chan string
-}
-
-func newWebsocketConnection(ctx context.Context, targetURL string, errCallback func(err error)) (*websocketConnection, error) {
-	ctx, cancel := context.WithCancel(ctx)
-	serverConn, _, err := websocket.DefaultDialer.Dial(targetURL, nil)
-	if err != nil {
-		log.Printf("Failed to dial the websocket server %q: %v\n", targetURL, err)
-		return nil, err
-	}
-	clientMessages := make(chan string, 10)
-	serverMessages := make(chan string, 10)
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		for {
-			select {
-			case <-ctx.Done():
-				close(serverMessages)
-				return
-			default:
-				if _, msgBytes, err := serverConn.ReadMessage(); err != nil {
-					errCallback(fmt.Errorf("failed to read a websocket message from the server: %v", err))
-				} else {
-					serverMessages <- string(msgBytes)
-				}
-			}
-		}
-	}()
-	go func() {
-		defer wg.Done()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case clientMsg := <-clientMessages:
-				if err := serverConn.WriteMessage(websocket.TextMessage, []byte(clientMsg)); err != nil {
-					errCallback(fmt.Errorf("failed to forward websocket data to the server: %v", err))
-				}
-			}
-		}
-	}()
-	go func() {
-		wg.Wait()
-		if err := serverConn.WriteMessage(
-			websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.CloseNormalClosure, "")); err != nil {
-			errCallback(fmt.Errorf("failure issuing a close message on a server websocket connection: %v", err))
-		}
-		if err := serverConn.Close(); err != nil {
-			errCallback(fmt.Errorf("failure closing a server websocket connection: %v", err))
-		}
-	}()
-	return &websocketConnection{
-		ctx:            ctx,
-		cancel:         cancel,
-		clientMessages: clientMessages,
-		ServerMessages: serverMessages,
-	}, nil
-}
-
-func (conn *websocketConnection) Close() {
-	conn.cancel()
-	close(conn.clientMessages)
-}
-
-func (conn *websocketConnection) SendClientMessage(msg string) error {
-	select {
-	case <-conn.ctx.Done():
-		return fmt.Errorf("attempt to send a client message on a closed websocket connection")
-	default:
-		conn.clientMessages <- msg
 	}
 	return nil
 }
@@ -302,7 +221,7 @@ func createShimChannel(ctx context.Context, host, shimPath string) http.Handler 
 	var connections sync.Map
 	var sessionCount uint64
 	mux := http.NewServeMux()
-	mux.HandleFunc("/"+shimPath+"/open", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(path.Join(shimPath, "open"), func(w http.ResponseWriter, r *http.Request) {
 		sessionID := fmt.Sprintf("%d", atomic.AddUint64(&sessionCount, 1))
 		body, err := ioutil.ReadAll(r.Body)
 		if err != nil {
@@ -316,7 +235,7 @@ func createShimChannel(ctx context.Context, host, shimPath string) http.Handler 
 		}
 		targetURL.Scheme = "ws"
 		targetURL.Host = host
-		conn, err := newWebsocketConnection(ctx, targetURL.String(),
+		conn, err := NewConnection(ctx, targetURL.String(),
 			func(err error) {
 				log.Printf("Websocket failure: %v", err)
 			})
@@ -340,7 +259,7 @@ func createShimChannel(ctx context.Context, host, shimPath string) http.Handler 
 		w.WriteHeader(http.StatusOK)
 		w.Write(respBytes)
 	})
-	mux.HandleFunc("/"+shimPath+"/close", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(path.Join(shimPath, "close"), func(w http.ResponseWriter, r *http.Request) {
 		body, err := ioutil.ReadAll(r.Body)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("internal error reading a shim request: %v", err), http.StatusInternalServerError)
@@ -356,7 +275,7 @@ func createShimChannel(ctx context.Context, host, shimPath string) http.Handler 
 			http.Error(w, fmt.Sprintf("unknown shim session ID: %q", msg.ID), http.StatusBadRequest)
 			return
 		}
-		conn, ok := c.(*websocketConnection)
+		conn, ok := c.(*Connection)
 		if !ok {
 			http.Error(w, "internal error reading a shim session", http.StatusInternalServerError)
 			return
@@ -366,7 +285,7 @@ func createShimChannel(ctx context.Context, host, shimPath string) http.Handler 
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
 	})
-	mux.HandleFunc("/"+shimPath+"/data", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(path.Join(shimPath, "data"), func(w http.ResponseWriter, r *http.Request) {
 		body, err := ioutil.ReadAll(r.Body)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("internal error reading a shim request: %v", err), http.StatusInternalServerError)
@@ -382,7 +301,7 @@ func createShimChannel(ctx context.Context, host, shimPath string) http.Handler 
 			http.Error(w, fmt.Sprintf("unknown shim session ID: %q", msg.ID), http.StatusBadRequest)
 			return
 		}
-		conn, ok := c.(*websocketConnection)
+		conn, ok := c.(*Connection)
 		if !ok {
 			http.Error(w, "internal error reading a shim session", http.StatusInternalServerError)
 			return
@@ -394,7 +313,7 @@ func createShimChannel(ctx context.Context, host, shimPath string) http.Handler 
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
 	})
-	mux.HandleFunc("/"+shimPath+"/poll", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(path.Join(shimPath, "poll"), func(w http.ResponseWriter, r *http.Request) {
 		body, err := ioutil.ReadAll(r.Body)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("internal error reading a shim request: %v", err), http.StatusInternalServerError)
@@ -410,7 +329,7 @@ func createShimChannel(ctx context.Context, host, shimPath string) http.Handler 
 			http.Error(w, fmt.Sprintf("unknown shim session ID: %q", msg.ID), http.StatusBadRequest)
 			return
 		}
-		conn, ok := c.(*websocketConnection)
+		conn, ok := c.(*Connection)
 		if !ok {
 			http.Error(w, "internal error reading a shim session", http.StatusInternalServerError)
 			return
@@ -426,18 +345,23 @@ func createShimChannel(ctx context.Context, host, shimPath string) http.Handler 
 	return mux
 }
 
-func ReverseProxy(ctx context.Context, wrapped *httputil.ReverseProxy, host, shimPath string) (http.Handler, error) {
+func Proxy(ctx context.Context, wrapped *httputil.ReverseProxy, host, shimPath string, injectShimCode bool) (http.Handler, error) {
 	var templateBuf bytes.Buffer
-	if err := websocketShimTmpl.Execute(&templateBuf, &struct{ ShimPath string }{ShimPath: shimPath}); err != nil {
+	if err := shimTmpl.Execute(&templateBuf, &struct{ ShimPath string }{ShimPath: shimPath}); err != nil {
 		return nil, err
 	}
-	websocketShim := templateBuf.String()
-	wrapped.ModifyResponse = func(resp *http.Response) error {
-		return shimBody(resp, websocketShim)
+	shimCode := templateBuf.String()
+	if injectShimCode {
+		wrapped.ModifyResponse = func(resp *http.Response) error {
+			return shimBody(resp, shimCode)
+		}
 	}
-	shimServer := createShimChannel(ctx, host, shimPath)
 	mux := http.NewServeMux()
-	mux.Handle("/"+shimPath+"/", shimServer)
+	if shimPath != "" {
+		shimPath = path.Clean("/"+shimPath) + "/"
+		shimServer := createShimChannel(ctx, host, shimPath)
+		mux.Handle(shimPath, shimServer)
+	}
 	mux.Handle("/", wrapped)
 	return mux, nil
 }

@@ -58,28 +58,28 @@ var (
 	backendID            = flag.String("backend", "", "Unique ID for this backend.")
 	debug                = flag.Bool("debug", false, "Whether or not to print debug log messages")
 	forwardUserID        = flag.Bool("forward-user-id", false, "Whether or not to include the ID (email address) of the end user in requests to the backend")
-	shimWebsockets       = flag.Bool("shim-websockets", false, "Whether or not to replace websockets with socket.io")
+	shimWebsockets       = flag.Bool("shim-websockets", false, "Whether or not to replace websockets with a shim")
 	shimPath             = flag.String("shim-path", "websocket-shim", "Path under which to handle websocket shim requests")
 	healthCheckPath      = flag.String("health-check-path", "/", "Path on backend host to issue health checks against.  Defaults to the root.")
 	healthCheckFreq      = flag.Int("health-check-interval-seconds", 0, "Wait time in seconds between health checks.  Set to zero to disable health checks.  Checks disabled by default.")
 	healthCheckUnhealthy = flag.Int("health-check-unhealthy-threshold", 2, "A so-far healthy backend will be marked unhealthy after this many consecutive failures. The minimum value is 1.")
 )
 
-func getReverseProxy(ctx context.Context) (http.Handler, error) {
-	reverseProxy := httputil.NewSingleHostReverseProxy(&url.URL{
+func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) (http.Handler, error) {
+	hostProxy := httputil.NewSingleHostReverseProxy(&url.URL{
 		Scheme: "http",
-		Host:   *host,
+		Host:   host,
 	})
-	reverseProxy.FlushInterval = 100 * time.Millisecond
-	if !*shimWebsockets {
-		return reverseProxy, nil
+	hostProxy.FlushInterval = 100 * time.Millisecond
+	if shimPath == "" {
+		return hostProxy, nil
 	}
-	return websockets.ReverseProxy(ctx, reverseProxy, *host, *shimPath)
+	return websockets.Proxy(ctx, hostProxy, host, shimPath, injectShimCode)
 }
 
 // forwardRequest forwards the given request from the proxy to
 // the backend server and reports the response back to the proxy.
-func forwardRequest(client *http.Client, reverseProxy http.Handler, request *utils.ForwardedRequest) error {
+func forwardRequest(client *http.Client, hostProxy http.Handler, request *utils.ForwardedRequest) error {
 	httpRequest := request.Contents
 	if *forwardUserID {
 		httpRequest.Header.Add(utils.HeaderUserID, request.User)
@@ -88,7 +88,7 @@ func forwardRequest(client *http.Client, reverseProxy http.Handler, request *uti
 	if err != nil {
 		return fmt.Errorf("failed to create the response forwarder: %v", err)
 	}
-	reverseProxy.ServeHTTP(responseForwarder, httpRequest)
+	hostProxy.ServeHTTP(responseForwarder, httpRequest)
 	if *debug {
 		log.Printf("Backend latency for request %s: %s\n", request.RequestID, time.Since(request.StartTime).String())
 	}
@@ -114,9 +114,9 @@ func healthCheck() error {
 }
 
 // processOneRequest reads a single request from the proxy and forwards it to the backend server.
-func processOneRequest(client *http.Client, reverseProxy http.Handler, backendID string, requestID string) {
+func processOneRequest(client *http.Client, hostProxy http.Handler, backendID string, requestID string) {
 	requestForwarder := func(client *http.Client, request *utils.ForwardedRequest) error {
-		if err := forwardRequest(client, reverseProxy, request); err != nil {
+		if err := forwardRequest(client, hostProxy, request); err != nil {
 			log.Printf("Failure forwarding a request: [%s] %q\n", requestID, err.Error())
 			return fmt.Errorf("failed to forward the request %q: %v", requestID, err)
 		}
@@ -137,7 +137,7 @@ func exponentialBackoffDuration(retryCount uint) time.Duration {
 
 // pollForNewRequests repeatedly reaches out to the proxy server to ask if any pending are available, and then
 // processes any newly-seen ones.
-func pollForNewRequests(client *http.Client, reverseProxy http.Handler, backendID string) {
+func pollForNewRequests(client *http.Client, hostProxy http.Handler, backendID string) {
 	previouslySeenRequests := lru.New(requestCacheLimit)
 	var retryCount uint
 	for {
@@ -150,7 +150,7 @@ func pollForNewRequests(client *http.Client, reverseProxy http.Handler, backendI
 			for _, requestID := range requests {
 				if _, ok := previouslySeenRequests.Get(requestID); !ok {
 					previouslySeenRequests.Add(requestID, requestID)
-					go processOneRequest(client, reverseProxy, backendID, requestID)
+					go processOneRequest(client, hostProxy, backendID, requestID)
 				}
 			}
 		}
@@ -222,11 +222,11 @@ func runAdapter() error {
 		return err
 	}
 
-	reverseProxy, err := getReverseProxy(ctx)
+	hostProxy, err := hostProxy(ctx, *host, *shimPath, *shimWebsockets)
 	if err != nil {
 		return err
 	}
-	pollForNewRequests(client, reverseProxy, *backendID)
+	pollForNewRequests(client, hostProxy, *backendID)
 	return nil
 }
 
