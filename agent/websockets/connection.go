@@ -46,14 +46,19 @@ func NewConnection(ctx context.Context, targetURL string, errCallback func(err e
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
+		defer func() {
+			close(serverMessages)
+		}()
 		for {
 			select {
 			case <-ctx.Done():
-				close(serverMessages)
 				return
 			default:
 				if _, msgBytes, err := serverConn.ReadMessage(); err != nil {
 					errCallback(fmt.Errorf("failed to read a websocket message from the server: %v", err))
+					// Errors from the server connection are terminal; once an error is returned
+					// no subsequent calls will succeed.
+					return
 				} else {
 					serverMessages <- string(msgBytes)
 				}
@@ -69,6 +74,7 @@ func NewConnection(ctx context.Context, targetURL string, errCallback func(err e
 			case clientMsg := <-clientMessages:
 				if err := serverConn.WriteMessage(websocket.TextMessage, []byte(clientMsg)); err != nil {
 					errCallback(fmt.Errorf("failed to forward websocket data to the server: %v", err))
+					return
 				}
 			}
 		}
