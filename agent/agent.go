@@ -59,7 +59,7 @@ var (
 	debug                = flag.Bool("debug", false, "Whether or not to print debug log messages")
 	forwardUserID        = flag.Bool("forward-user-id", false, "Whether or not to include the ID (email address) of the end user in requests to the backend")
 	shimWebsockets       = flag.Bool("shim-websockets", false, "Whether or not to replace websockets with a shim")
-	shimPath             = flag.String("shim-path", "websocket-shim", "Path under which to handle websocket shim requests")
+	shimPath             = flag.String("shim-path", "", "Path under which to handle websocket shim requests")
 	healthCheckPath      = flag.String("health-check-path", "/", "Path on backend host to issue health checks against.  Defaults to the root.")
 	healthCheckFreq      = flag.Int("health-check-interval-seconds", 0, "Wait time in seconds between health checks.  Set to zero to disable health checks.  Checks disabled by default.")
 	healthCheckUnhealthy = flag.Int("health-check-unhealthy-threshold", 2, "A so-far healthy backend will be marked unhealthy after this many consecutive failures. The minimum value is 1.")
