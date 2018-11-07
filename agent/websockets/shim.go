@@ -32,7 +32,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"text/template"
-	"time"
 
 	"golang.org/x/net/context"
 )
@@ -334,13 +333,16 @@ func createShimChannel(ctx context.Context, host, shimPath string) http.Handler 
 			http.Error(w, "internal error reading a shim session", http.StatusInternalServerError)
 			return
 		}
-		select {
-		case serverMsg := <-conn.ServerMessages:
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(serverMsg))
-		case <-time.After(time.Second * 20):
+		serverMsg, err := conn.ReadServerMessage()
+		if err != nil {
+			http.Error(w, fmt.Sprintf("attempt to read data from a closed session: %q", msg.ID), http.StatusBadRequest)
+			return
+		} else if serverMsg == nil {
 			w.WriteHeader(http.StatusRequestTimeout)
+			return
 		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(*serverMsg))
 	})
 	return mux
 }

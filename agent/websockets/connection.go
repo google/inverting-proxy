@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"golang.org/x/net/context"
@@ -30,7 +31,7 @@ type Connection struct {
 	ctx            context.Context
 	cancel         context.CancelFunc
 	clientMessages chan string
-	ServerMessages chan string
+	serverMessages chan string
 }
 
 func NewConnection(ctx context.Context, targetURL string, errCallback func(err error)) (*Connection, error) {
@@ -94,7 +95,7 @@ func NewConnection(ctx context.Context, targetURL string, errCallback func(err e
 		ctx:            ctx,
 		cancel:         cancel,
 		clientMessages: clientMessages,
-		ServerMessages: serverMessages,
+		serverMessages: serverMessages,
 	}, nil
 }
 
@@ -111,4 +112,17 @@ func (conn *Connection) SendClientMessage(msg string) error {
 		conn.clientMessages <- msg
 	}
 	return nil
+}
+
+func (conn *Connection) ReadServerMessage() (*string, error) {
+	select {
+	case serverMsg, ok := <-conn.serverMessages:
+		if !ok {
+			// The server messages channel has been closed.
+			return nil, fmt.Errorf("attempt to read a server message from a closed websocket connection")
+		}
+		return &serverMsg, nil
+	case <-time.After(time.Second * 20):
+		return nil, nil
+	}
 }
