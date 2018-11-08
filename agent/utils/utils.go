@@ -67,10 +67,10 @@ var hopHeaders = map[string]bool{
 	"Keep-Alive":          true,
 	"Proxy-Authenticate":  true,
 	"Proxy-Authorization": true,
-	"Te":                true, // canonicalized version of "TE"
-	"Trailer":           true, // not Trailers per URL above; http://www.rfc-editor.org/errata_search.php?eid=4522
-	"Transfer-Encoding": true,
-	"Upgrade":           true,
+	"Te":                  true, // canonicalized version of "TE"
+	"Trailer":             true, // not Trailers per URL above; http://www.rfc-editor.org/errata_search.php?eid=4522
+	"Transfer-Encoding":   true,
+	"Upgrade":             true,
 }
 
 // PendingRequests represents a list of request IDs that do not yet have a response.
@@ -256,6 +256,11 @@ type ResponseForwarder struct {
 	// by the backend target.
 	response *http.Response
 
+	// header is used to store the response headers prior to sending them.
+	// This is separate from the headers in the response as it includes hop headers,
+	// which will be filtered out before sending the response.
+	header http.Header
+
 	// errors is a channel where all internal errors from proxying a request/response
 	// get written. This is eventually returned to the caller of the Close method.
 	errors chan error
@@ -332,6 +337,7 @@ func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID s
 			Body:       responseBodyReader,
 		},
 		wroteHeader:        false,
+		header:             make(http.Header),
 		proxyWriter:        proxyWriter,
 		startedChan:        startedChan,
 		responseBodyWriter: responseBodyWriter,
@@ -348,7 +354,7 @@ func (rf *ResponseForwarder) notify() {
 
 // Header implements the http.ResponseWriter interface.
 func (rf *ResponseForwarder) Header() http.Header {
-	return rf.response.Header
+	return rf.header
 }
 
 // Write implements the http.ResponseWriter interface.
@@ -373,7 +379,7 @@ func (rf *ResponseForwarder) WriteHeader(code int) {
 		return
 	}
 	rf.wroteHeader = true
-	for k, v := range rf.response.Header {
+	for k, v := range rf.header {
 		if _, ok := hopHeaders[k]; ok {
 			continue
 		}

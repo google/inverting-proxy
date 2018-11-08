@@ -22,11 +22,11 @@ RUN apt-get update && apt-get upgrade -y && \
     mkdir -p /opt/bin && \
     mkdir -p /opt/src/github.com/google/inverting-proxy
 
-ADD ./ /opt/src/github.com/google/inverting-proxy/agent
+ADD ./ /opt/src/github.com/google/inverting-proxy
 
-RUN wget -O /opt/go1.6.2.linux-amd64.tar.gz \
-      https://storage.googleapis.com/golang/go1.6.2.linux-amd64.tar.gz && \
-    tar -C /usr/local -xzf /opt/go1.6.2.linux-amd64.tar.gz && \
+RUN wget -O /opt/go1.11.1.linux-amd64.tar.gz \
+      https://storage.googleapis.com/golang/go1.11.1.linux-amd64.tar.gz && \
+    tar -C /usr/local -xzf /opt/go1.11.1.linux-amd64.tar.gz && \
     export PATH=${PATH}:/usr/local/go/bin/:/opt/bin/ && \
     export GOPATH=/opt/ && \
     go get github.com/golang/groupcache/lru && \
@@ -37,12 +37,15 @@ RUN wget -O /opt/go1.6.2.linux-amd64.tar.gz \
     rm -rf /opt/go1.4.2.linux-amd64.tar.gz && \
     rm -rf /usr/local
 
+ENV DEBUG "false"
 ENV PROXY ""
 ENV BACKEND ""
 ENV HOSTNAME "localhost"
 ENV PORT "8080"
+ENV SHIM_WEBSOCKETS "false"
+ENV SHIM_PATH ""
 ENV HEALTH_CHECK_PATH "/"
 ENV HEALTH_CHECK_INTERVAL_SECONDS "0"
 ENV HEALTH_CHECK_UNHEALTHY_THRESHOLD "2"
 
-CMD ["/bin/sh", "-c", "/opt/bin/proxy-forwarding-agent --proxy=${PROXY} --backend=${BACKEND} --host=${HOSTNAME}:${PORT} --health-check-path=${HEALTH_CHECK_PATH} --health-check-interval-seconds=${HEALTH_CHECK_INTERVAL_SECONDS} --health-check-unhealthy-threshold=${HEALTH_CHECK_UNHEALTHY_THRESHOLD}" ]
+CMD ["/bin/sh", "-c", "/opt/bin/proxy-forwarding-agent --debug=${DEBUG} --proxy=${PROXY} --backend=${BACKEND} --host=${HOSTNAME}:${PORT} --shim-websockets=${SHIM_WEBSOCKETS} --shim-path=${SHIM_PATH} --health-check-path=${HEALTH_CHECK_PATH} --health-check-interval-seconds=${HEALTH_CHECK_INTERVAL_SECONDS} --health-check-unhealthy-threshold=${HEALTH_CHECK_UNHEALTHY_THRESHOLD}" ]
