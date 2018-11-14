@@ -44,6 +44,7 @@ func NewConnection(ctx context.Context, targetURL string, errCallback func(err e
 	serverConn, _, err := websocket.DefaultDialer.Dial(targetURL, nil)
 	if err != nil {
 		log.Printf("Failed to dial the websocket server %q: %v\n", targetURL, err)
+		cancel()
 		return nil, err
 	}
 
