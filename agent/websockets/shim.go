@@ -14,7 +14,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package websockets defines logic for the agent routing websocket connections.
 package websockets
 
 import (
@@ -347,6 +346,7 @@ func createShimChannel(ctx context.Context, host, shimPath string) http.Handler 
 	return mux
 }
 
+// Proxy creates a reverse proxy that inserts websocket-shim code into all HTML responses.
 func Proxy(ctx context.Context, wrapped *httputil.ReverseProxy, host, shimPath string, injectShimCode bool) (http.Handler, error) {
 	var templateBuf bytes.Buffer
 	if err := shimTmpl.Execute(&templateBuf, &struct{ ShimPath string }{ShimPath: shimPath}); err != nil {

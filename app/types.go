@@ -22,7 +22,7 @@ import (
 	"golang.org/x/net/context"
 )
 
-// Type Request represents an end-user request that we forward.
+// Request represents an end-user request that we forward.
 type Request struct {
 	BackendID string
 	RequestID string
@@ -32,7 +32,7 @@ type Request struct {
 	Completed bool
 }
 
-// Type Response represents the response to an end-user request that we forward.
+// Response represents the response to an end-user request that we forward.
 type Response struct {
 	BackendID string
 	RequestID string
@@ -40,7 +40,7 @@ type Response struct {
 	StartTime time.Time
 }
 
-// Type Backend represents a backend server that is allowed to process requests.
+// Backend represents a backend server that is allowed to process requests.
 type Backend struct {
 	// BackendID is a string that uniquely identifies a specific backend instance.
 	BackendID string `json:"id,omitempty"`
@@ -73,7 +73,7 @@ func NewRequest(backendID, requestID, userEmail string, requestBytes []byte) *Re
 	}
 }
 
-// Type Store defines the interface for reading and writing our internal metadata
+// Store defines the interface for reading and writing our internal metadata
 // about requests, responses, and backends.
 type Store interface {
 	// WriteRequest writes the given request to the Store.
