@@ -14,7 +14,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package websockets defines logic for the agent routing websocket connections.
 package websockets
 
 import (
@@ -70,14 +69,14 @@ func NewConnection(ctx context.Context, targetURL string, errCallback func(err e
 			case <-ctx.Done():
 				return
 			default:
-				if _, msgBytes, err := serverConn.ReadMessage(); err != nil {
+				_, msgBytes, err := serverConn.ReadMessage()
+				if err != nil {
 					errCallback(fmt.Errorf("failed to read a websocket message from the server: %v", err))
 					// Errors from the server connection are terminal; once an error is returned
 					// no subsequent calls will succeed.
 					return
-				} else {
-					serverMessages <- string(msgBytes)
 				}
+				serverMessages <- string(msgBytes)
 			}
 		}
 	}()

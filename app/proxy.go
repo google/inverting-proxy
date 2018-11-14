@@ -19,7 +19,6 @@ limitations under the License.
 // To deploy, export the ID of your project as ${PROJECT_ID} and then run:
 //
 //    $ make deploy
-
 package proxy
 
 import (
@@ -48,12 +47,17 @@ const (
 	requestsWaitTimeout = 30 * time.Second
 	responseWaitTimeout = 30 * time.Second
 
-	HeaderUserID           = "X-Inverting-Proxy-User-ID"
-	HeaderRequestID        = "X-Inverting-Proxy-Request-ID"
-	HeaderBackendID        = "X-Inverting-Proxy-Backend-ID"
-	HeaderRequestStartTime = "X-Inverting-Proxy-Request-Start-Time"
+	// HeaderUserID is the HTTP response header used to report the end user.
+	HeaderUserID = "X-Inverting-Proxy-User-ID"
 
-	NoBackendRedirectVar = "NO_BACKEND_REDIRECT_URL"
+	// HeaderRequestID is the HTTP request/response header used to uniquely identify an end-user request.
+	HeaderRequestID = "X-Inverting-Proxy-Request-ID"
+
+	// HeaderBackendID is the HTTP request/response header used to uniquely identify a proxied backend server.
+	HeaderBackendID = "X-Inverting-Proxy-Backend-ID"
+
+	// HeaderRequestStartTime is the HTTP response header used to report when an end-user request was initiated.
+	HeaderRequestStartTime = "X-Inverting-Proxy-Request-Start-Time"
 )
 
 func waitForNextRequests(ctx context.Context, s Store, backendID string) ([]string, error) {

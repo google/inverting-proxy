@@ -192,20 +192,19 @@ func readStoredRequest(ctx context.Context, backendID, requestID string) (*store
 	return &r, nil
 }
 
-func (sr *storedRequest) toRequest(ctx context.Context) (*Request, error) {
-	requestBytes, err := sr.RequestBytes.read(ctx)
+func (r *storedRequest) toRequest(ctx context.Context) (*Request, error) {
+	requestBytes, err := r.RequestBytes.read(ctx)
 	if err != nil {
 		return nil, err
 	}
-	r := &Request{
-		BackendID: sr.BackendID,
-		RequestID: sr.RequestID,
-		User:      sr.User,
-		StartTime: sr.StartTime,
+	return &Request{
+		BackendID: r.BackendID,
+		RequestID: r.RequestID,
+		User:      r.User,
+		StartTime: r.StartTime,
 		Contents:  requestBytes,
-		Completed: sr.Completed,
-	}
-	return r, nil
+		Completed: r.Completed,
+	}, nil
 }
 
 type storedResponse struct {
@@ -249,17 +248,16 @@ func readStoredResponse(ctx context.Context, backendID, requestID string) (*stor
 	return &r, nil
 }
 
-func (sr *storedResponse) toResponse(ctx context.Context) (*Response, error) {
-	responseBytes, err := sr.ResponseBytes.read(ctx)
+func (r *storedResponse) toResponse(ctx context.Context) (*Response, error) {
+	responseBytes, err := r.ResponseBytes.read(ctx)
 	if err != nil {
 		return nil, err
 	}
-	r := &Response{
-		BackendID: sr.BackendID,
-		RequestID: sr.RequestID,
+	return &Response{
+		BackendID: r.BackendID,
+		RequestID: r.RequestID,
 		Contents:  responseBytes,
-	}
-	return r, nil
+	}, nil
 }
 
 // Type persistentStore implements the Store interface and uses the Google Cloud Datastore for storing data.
