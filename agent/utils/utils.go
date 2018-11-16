@@ -261,9 +261,23 @@ type ResponseForwarder struct {
 	// which will be filtered out before sending the response.
 	header http.Header
 
-	// errors is a channel where all internal errors from proxying a request/response
-	// get written. This is eventually returned to the caller of the Close method.
-	errors chan error
+	// proxyClientErrors is a channel where any errors issuing a client request to
+	// the proxy server get written.
+	//
+	// This is eventually returned to the caller of the Close method.
+	proxyClientErrors chan error
+
+	// forwardingErrors is a channel where all errors forwarding the streamed
+	// response from the backend to the proxy get written.
+	//
+	// This is eventually returned to the caller of the Close method.
+	forwardingErrors chan error
+
+	// writeErrors is a channel where all errors writing the streamed response
+	// from the backend server get written.
+	//
+	// This is eventually returned to the caller of the Close method.
+	writeErrors chan error
 }
 
 // NewResponseForwarder constructs a new ResponseForwarder that forwards to the
@@ -294,7 +308,9 @@ func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID s
 	}
 	proxyReq.Header.Set("Content-Type", "text/plain")
 
-	errChan := make(chan error, 100)
+	proxyClientErrChan := make(chan error, 100)
+	forwardingErrChan := make(chan error, 100)
+	writeErrChan := make(chan error, 100)
 	go func() {
 		// Wait until the response body has started being written
 		// (for a non-empty response) or for the response to
@@ -307,25 +323,10 @@ func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID s
 		// token expires between the header being generated
 		// and the request being sent to the proxy.
 		<-startedChan
-
 		if _, err := client.Do(proxyReq); err != nil {
-			errChan <- err
+			proxyClientErrChan <- err
 		}
-
-		// The fact that the client.Do call has returned tells
-		// us that the proxyReader end of the pipe has returned
-		// an EOF. That, in turn, tells us that `Close` has been
-		// called on the proxyWriter end of the pipe. We don't
-		// call `Close` on the proxyWriter until after writing
-		// the response to it, so we similarly know that `Close`
-		// has been called on the responseBodyWriter.
-		//
-		// All of this means that we cannot get to this place in
-		// the code until `Close` as been called on the
-		// ResponseForwarder and the backend response has been
-		// forwarded to the proxy server. As such, we can now
-		// safely close the error channel.
-		close(errChan)
+		close(proxyClientErrChan)
 	}()
 
 	return &ResponseForwarder{
@@ -341,7 +342,9 @@ func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID s
 		proxyWriter:        proxyWriter,
 		startedChan:        startedChan,
 		responseBodyWriter: responseBodyWriter,
-		errors:             errChan,
+		proxyClientErrors:  proxyClientErrChan,
+		forwardingErrors:   forwardingErrChan,
+		writeErrors:        writeErrChan,
 	}, nil
 }
 
@@ -367,7 +370,7 @@ func (rf *ResponseForwarder) Write(buf []byte) (int, error) {
 	rf.notify()
 	count, err := rf.responseBodyWriter.Write(buf)
 	if err != nil {
-		rf.errors <- err
+		rf.writeErrors <- err
 	}
 	return count, err
 }
@@ -392,7 +395,7 @@ func (rf *ResponseForwarder) WriteHeader(code int) {
 	go func() {
 		defer rf.proxyWriter.Close()
 		if err := rf.response.Write(rf.proxyWriter); err != nil {
-			rf.errors <- err
+			rf.forwardingErrors <- err
 
 			// Normally, the end of this goroutine indicates
 			// that the response.Body reader has returned an EOF,
@@ -406,6 +409,7 @@ func (rf *ResponseForwarder) WriteHeader(code int) {
 			// we signal that issue to any remaining writers.
 			rf.response.Body.(*io.PipeReader).CloseWithError(err)
 		}
+		close(rf.forwardingErrors)
 	}()
 }
 
@@ -418,7 +422,14 @@ func (rf *ResponseForwarder) Close() error {
 	if err := rf.responseBodyWriter.Close(); err != nil {
 		errs = append(errs, err)
 	}
-	for err := range rf.errors {
+	for err := range rf.proxyClientErrors {
+		errs = append(errs, err)
+	}
+	for err := range rf.forwardingErrors {
+		errs = append(errs, err)
+	}
+	close(rf.writeErrors)
+	for err := range rf.writeErrors {
 		errs = append(errs, err)
 	}
 	if len(errs) > 0 {
