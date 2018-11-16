@@ -221,6 +221,7 @@ func runAdapter() error {
 	if err != nil {
 		return err
 	}
+	client.Timeout = 60 * time.Second
 
 	hostProxy, err := hostProxy(ctx, *host, *shimPath, *shimWebsockets)
 	if err != nil {
