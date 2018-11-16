@@ -17,9 +17,13 @@ limitations under the License.
 package utils
 
 import (
+	"bufio"
 	"io"
 	"io/ioutil"
 	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -118,5 +122,100 @@ func TestParseRequestFromProxyResponse(t *testing.T) {
 	}
 	if forwardedRequest.BackendID != "some-backend" || forwardedRequest.RequestID != "some-request" || forwardedRequest.User != "someone" || !(forwardedRequest.StartTime.Equal(mockStartTime)) {
 		t.Fatal("Unexpected request parsed from a proxy response")
+	}
+}
+
+func TestResponseForwarder(t *testing.T) {
+	const (
+		backendID      = "backend"
+		requestID      = "request"
+		endUserMessage = "hello"
+		backendMessage = "ok"
+	)
+	expectedResponse := strings.Join([]string{endUserMessage, backendMessage}, "\n")
+	endUserRequest := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(endUserMessage))
+	proxyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response, err := http.ReadResponse(bufio.NewReader(r.Body), endUserRequest)
+		if err != nil {
+			t.Errorf("Failure reading the proxied response: %v", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		responseBytes, err := ioutil.ReadAll(response.Body)
+		if err != nil {
+			t.Errorf("Failure reading the response body: %v", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if got, want := string(responseBytes), expectedResponse; got != want {
+			t.Errorf("Unexpected backend response; got %q, want %q", got, want)
+		}
+		w.Write([]byte("ok"))
+	}))
+	defer proxyServer.Close()
+	proxyClient := proxyServer.Client()
+	responseForwarder, err := NewResponseForwarder(proxyClient, proxyServer.URL+"/", backendID, requestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	backendServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestBytes, err := ioutil.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("Failure reading the proxied request: %v", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		respMessage := strings.Join([]string{string(requestBytes), backendMessage}, "\n")
+		w.Write([]byte(respMessage))
+	}))
+	defer backendServer.Close()
+	backendURL, err := url.Parse(backendServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	hostProxy := httputil.NewSingleHostReverseProxy(backendURL)
+	hostProxy.FlushInterval = 100 * time.Millisecond
+	hostProxy.ServeHTTP(responseForwarder, endUserRequest)
+	if err := responseForwarder.Close(); err != nil {
+		t.Errorf("failed to close the response forwarder: %v", err)
+	}
+}
+
+func TestResponseForwarderWithProxyHangup(t *testing.T) {
+	const (
+		backendID      = "backend"
+		requestID      = "request"
+		endUserMessage = "hello"
+		backendMessage = "ok"
+	)
+	endUserRequest := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(endUserMessage))
+	proxyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ioutil.ReadAll(r.Body)
+	}))
+	defer proxyServer.Close()
+	proxyClient := proxyServer.Client()
+	responseForwarder, err := NewResponseForwarder(proxyClient, proxyServer.URL+"/", backendID, requestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	backendServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Kill the proxy server, forcing the response forwarding to fail
+		proxyServer.Close()
+		w.Write([]byte("ok"))
+	}))
+	defer backendServer.Close()
+	backendURL, err := url.Parse(backendServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	hostProxy := httputil.NewSingleHostReverseProxy(backendURL)
+	hostProxy.FlushInterval = 100 * time.Millisecond
+	hostProxy.ServeHTTP(responseForwarder, endUserRequest)
+	if err := responseForwarder.Close(); err == nil {
+		t.Errorf("missing expected error forwarding to a closed proxy")
 	}
 }
