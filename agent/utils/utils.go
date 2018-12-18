@@ -19,12 +19,13 @@ package utils
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"net/http"
-	"sync"
 	"time"
 
 	"cloud.google.com/go/compute/metadata"
@@ -124,11 +125,6 @@ func parseRequestIDs(response *http.Response) ([]string, error) {
 	return requests, nil
 }
 
-var (
-	hasVMIDOnce sync.Once
-	hasVMID     bool
-)
-
 func hasVMServiceAccount() bool {
 	if !metadata.OnGCE() {
 		return false
@@ -140,29 +136,73 @@ func hasVMServiceAccount() bool {
 	return true
 }
 
-func checkVMID() {
-	// VM Identity requires a service account.
-	hasVMID = hasVMServiceAccount()
+func getVMID(audience string) string {
+	for {
+		idPath := fmt.Sprintf("instance/service-accounts/default/identity?format=full&audience=%s", audience)
+		vmID, err := metadata.Get(idPath)
+		if err == nil {
+			return vmID
+		}
+		log.Printf("failure fetching a VM ID: %v", err)
+	}
 }
 
-// addVMIDHeader adds a header to the given request identifying the VM (if any) on which the agent is running.
+func newIDChannel(ctx context.Context, audience string) chan string {
+	ch := make(chan string)
+	go func() {
+		defer close(ch)
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+
+		currID := getVMID(audience)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				currID = getVMID(audience)
+			case ch <- currID:
+				continue
+			}
+		}
+	}()
+	return ch
+}
+
+type vmTransport struct {
+	proxyURL string
+	wrapped  http.RoundTripper
+	idChan   chan string
+}
+
+func (t *vmTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	select {
+	case <-r.Context().Done():
+		return nil, fmt.Errorf("request cancelled")
+	case id := <-t.idChan:
+		r.Header.Add(HeaderVMID, id)
+	}
+	return t.wrapped.RoundTrip(r)
+}
+
+// RoundTripperWithVMIdentity returns an http.RoundTripper that includes a GCE VM ID token in
+// every outbound request. The token is fetched from the metadata server and
+// stored in the 'X-Inverting-Proxy-VM-ID' header.
 //
 // This method relies on the Google Compute Engine functionality for verifying a VM's identity
-// (https://cloud.google.com/compute/docs/instances/verifying-instance-identity), so it does
-// nothing if the agent is not running inside of a Google Compute Engine VM.
-func addVMIDHeader(proxyURL string, req *http.Request) error {
-	hasVMIDOnce.Do(checkVMID)
-	if !hasVMID {
-		return nil
+// (https://cloud.google.com/compute/docs/instances/verifying-instance-identity), so it if this
+// is not running inside of a Google Compute Engine VM, then it just returns the passed in RoundTripper.
+func RoundTripperWithVMIdentity(ctx context.Context, wrapped http.RoundTripper, proxyURL string) http.RoundTripper {
+	if !hasVMServiceAccount() {
+		return wrapped
 	}
 
-	idPath := fmt.Sprintf("instance/service-accounts/default/identity?format=full&audience=%s", proxyURL)
-	vmID, err := metadata.Get(idPath)
-	if err != nil {
-		return err
+	idChan := newIDChannel(ctx, proxyURL)
+	return &vmTransport{
+		proxyURL: proxyURL,
+		wrapped:  wrapped,
+		idChan:   idChan,
 	}
-	req.Header.Add(HeaderVMID, vmID)
-	return nil
 }
 
 // ListPendingRequests issues a single request to the proxy to ask for the IDs of pending requests.
@@ -173,9 +213,6 @@ func ListPendingRequests(client *http.Client, proxyHost, backendID string) ([]st
 		return nil, err
 	}
 	proxyReq.Header.Add(HeaderBackendID, backendID)
-	if err := addVMIDHeader(proxyURL, proxyReq); err != nil {
-		return nil, fmt.Errorf("Failure adding the VM ID header to a proxy request: %q", err.Error())
-	}
 	proxyResp, err := client.Do(proxyReq)
 	if err != nil {
 		return nil, fmt.Errorf("A proxy request failed: %q", err.Error())
@@ -221,9 +258,6 @@ func ReadRequest(client *http.Client, proxyHost, backendID, requestID string, ca
 	}
 	proxyReq.Header.Add(HeaderBackendID, backendID)
 	proxyReq.Header.Add(HeaderRequestID, requestID)
-	if err := addVMIDHeader(proxyURL, proxyReq); err != nil {
-		return fmt.Errorf("Failure adding the VM ID header to a proxy request: %q", err.Error())
-	}
 	proxyResp, err := client.Do(proxyReq)
 	if err != nil {
 		return fmt.Errorf("A proxy request failed: %q", err.Error())
@@ -303,9 +337,6 @@ func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID s
 	}
 	proxyReq.Header.Set(HeaderBackendID, backendID)
 	proxyReq.Header.Set(HeaderRequestID, requestID)
-	if err := addVMIDHeader(proxyURL, proxyReq); err != nil {
-		return nil, fmt.Errorf("Failure adding the VM ID header to a proxy request: %q", err.Error())
-	}
 	proxyReq.Header.Set("Content-Type", "text/plain")
 
 	proxyClientErrChan := make(chan error, 100)

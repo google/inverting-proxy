@@ -39,6 +39,7 @@ RUN wget -O /opt/go1.11.1.linux-amd64.tar.gz \
 
 ENV DEBUG "false"
 ENV PROXY ""
+ENV PROXY_TIMEOUT "60s"
 ENV BACKEND ""
 ENV HOSTNAME "localhost"
 ENV PORT "8080"
@@ -48,4 +49,4 @@ ENV HEALTH_CHECK_PATH "/"
 ENV HEALTH_CHECK_INTERVAL_SECONDS "0"
 ENV HEALTH_CHECK_UNHEALTHY_THRESHOLD "2"
 
-CMD ["/bin/sh", "-c", "/opt/bin/proxy-forwarding-agent --debug=${DEBUG} --proxy=${PROXY} --backend=${BACKEND} --host=${HOSTNAME}:${PORT} --shim-websockets=${SHIM_WEBSOCKETS} --shim-path=${SHIM_PATH} --health-check-path=${HEALTH_CHECK_PATH} --health-check-interval-seconds=${HEALTH_CHECK_INTERVAL_SECONDS} --health-check-unhealthy-threshold=${HEALTH_CHECK_UNHEALTHY_THRESHOLD}" ]
+CMD ["/bin/sh", "-c", "/opt/bin/proxy-forwarding-agent --debug=${DEBUG} --proxy=${PROXY} --proxy-timeout=${PROXY_TIMEOUT} --backend=${BACKEND} --host=${HOSTNAME}:${PORT} --shim-websockets=${SHIM_WEBSOCKETS} --shim-path=${SHIM_PATH} --health-check-path=${HEALTH_CHECK_PATH} --health-check-interval-seconds=${HEALTH_CHECK_INTERVAL_SECONDS} --health-check-unhealthy-threshold=${HEALTH_CHECK_UNHEALTHY_THRESHOLD}" ]
