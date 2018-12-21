@@ -26,6 +26,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"cloud.google.com/go/compute/metadata"
@@ -147,41 +148,19 @@ func getVMID(audience string) string {
 	}
 }
 
-func newIDChannel(ctx context.Context, audience string) chan string {
-	ch := make(chan string)
-	go func() {
-		defer close(ch)
-		ticker := time.NewTicker(10 * time.Second)
-		defer ticker.Stop()
-
-		currID := getVMID(audience)
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				currID = getVMID(audience)
-			case ch <- currID:
-				continue
-			}
-		}
-	}()
-	return ch
-}
-
 type vmTransport struct {
-	proxyURL string
-	wrapped  http.RoundTripper
-	idChan   chan string
+	wrapped http.RoundTripper
+
+	// Protects the `currID` field below
+	sync.Mutex
+	currID string
 }
 
 func (t *vmTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	select {
-	case <-r.Context().Done():
-		return nil, fmt.Errorf("request cancelled")
-	case id := <-t.idChan:
-		r.Header.Add(HeaderVMID, id)
-	}
+	t.Lock()
+	id := t.currID
+	t.Unlock()
+	r.Header.Add(HeaderVMID, id)
 	return t.wrapped.RoundTrip(r)
 }
 
@@ -197,12 +176,26 @@ func RoundTripperWithVMIdentity(ctx context.Context, wrapped http.RoundTripper, 
 		return wrapped
 	}
 
-	idChan := newIDChannel(ctx, proxyURL)
-	return &vmTransport{
-		proxyURL: proxyURL,
-		wrapped:  wrapped,
-		idChan:   idChan,
+	transport := &vmTransport{
+		wrapped: wrapped,
+		currID:  getVMID(proxyURL),
 	}
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				nextID := getVMID(proxyURL)
+				transport.Lock()
+				transport.currID = nextID
+				transport.Unlock()
+			}
+		}
+	}()
+	return transport
 }
 
 // ListPendingRequests issues a single request to the proxy to ask for the IDs of pending requests.
