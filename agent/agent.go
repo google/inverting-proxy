@@ -54,6 +54,7 @@ const (
 
 var (
 	proxy                = flag.String("proxy", "", "URL (including scheme) of the inverting proxy")
+	proxyTimeout         = flag.Duration("proxy-timeout", 60*time.Second, "Client timeout when sending requests to the inverting proxy")
 	host                 = flag.String("host", "localhost:8080", "Hostname (including port) of the backend server")
 	backendID            = flag.String("backend", "", "Unique ID for this backend.")
 	debug                = flag.Bool("debug", false, "Whether or not to print debug log messages")
@@ -163,7 +164,12 @@ func getGoogleClient(ctx context.Context) (*http.Client, error) {
 		return sdkConfig.Client(ctx), nil
 	}
 
-	return google.DefaultClient(ctx, compute.CloudPlatformScope, emailScope)
+	client, err := google.DefaultClient(ctx, compute.CloudPlatformScope, emailScope)
+	if err != nil {
+		return nil, err
+	}
+	client.Transport = utils.RoundTripperWithVMIdentity(ctx, client.Transport, *proxy)
+	return client, nil
 }
 
 // waitForHealthy runs health checks against the backend and returns
@@ -221,7 +227,7 @@ func runAdapter() error {
 	if err != nil {
 		return err
 	}
-	client.Timeout = 60 * time.Second
+	client.Timeout = *proxyTimeout
 
 	hostProxy, err := hostProxy(ctx, *host, *shimPath, *shimWebsockets)
 	if err != nil {
