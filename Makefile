@@ -4,6 +4,7 @@ build:	test
 
 test:	vet
 	go test ./agent/utils/...
+	go test -count 1 ./agent/agent_test.go
 
 vet:	fmt
 	go vet ./agent/utils/...
