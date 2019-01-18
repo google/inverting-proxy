@@ -82,9 +82,12 @@ const (
           self.onopen({ target: self });
         }
       }
-      function receiveHandler(msg) {
+      function receiveHandler(resp) {
+        var msgs = JSON.parse(resp);
         if (self.onmessage) {
-          self.onmessage({ target: self, data: msg });
+          msgs.forEach(function(msg) {
+            self.onmessage({ target: self, data: msg });
+          });
         }
       }
       function errorHandler() {
@@ -132,8 +135,9 @@ const (
            return;
          }
          self.pushing = true;
-         var msg = self.pendingMessages.shift();
-         self.xhr('data', msg, null, function() {
+         var msgs = self.pendingMessages;
+         self.pendingMessages = [];
+         self.xhr('data', msgs, null, function() {
            self.pushing = false;
            self.push();
          })
@@ -165,7 +169,7 @@ const (
           throw new Error('WebSocket is not yet opened');
         }
         this.pendingMessages.push({'id': this._sessionID, 'msg': data});
-        self.push();
+        this.push();
       },
       close: function() {
         if (this.readyState != WebSocketShim.OPEN) {
@@ -225,6 +229,7 @@ func shimBody(resp *http.Response, shimCode string) error {
 		reader: io.MultiReader(strings.NewReader(prefix), wrapped),
 		closer: wrapped,
 	}
+	resp.Header.Del("Content-Length")
 	return nil
 }
 
@@ -307,24 +312,26 @@ func createShimChannel(ctx context.Context, host, shimPath string) http.Handler 
 			http.Error(w, fmt.Sprintf("internal error reading a shim request: %v", err), http.StatusInternalServerError)
 			return
 		}
-		var msg sessionMessage
-		if err := json.Unmarshal(body, &msg); err != nil {
+		var msgs []sessionMessage
+		if err := json.Unmarshal(body, &msgs); err != nil {
 			http.Error(w, fmt.Sprintf("error parsing a shim request: %v", err), http.StatusBadRequest)
 			return
 		}
-		c, ok := connections.Load(msg.ID)
-		if !ok {
-			http.Error(w, fmt.Sprintf("unknown shim session ID: %q", msg.ID), http.StatusBadRequest)
-			return
-		}
-		conn, ok := c.(*Connection)
-		if !ok {
-			http.Error(w, "internal error reading a shim session", http.StatusInternalServerError)
-			return
-		}
-		if err := conn.SendClientMessage(msg.Message); err != nil {
-			http.Error(w, fmt.Sprintf("attempt to send data on a closed session: %q", msg.ID), http.StatusBadRequest)
-			return
+		for _, msg := range msgs {
+			c, ok := connections.Load(msg.ID)
+			if !ok {
+				http.Error(w, fmt.Sprintf("unknown shim session ID: %q", msg.ID), http.StatusBadRequest)
+				return
+			}
+			conn, ok := c.(*Connection)
+			if !ok {
+				http.Error(w, "internal error reading a shim session", http.StatusInternalServerError)
+				return
+			}
+			if err := conn.SendClientMessage(msg.Message); err != nil {
+				http.Error(w, fmt.Sprintf("attempt to send data on a closed session: %q", msg.ID), http.StatusBadRequest)
+				return
+			}
 		}
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
@@ -350,16 +357,21 @@ func createShimChannel(ctx context.Context, host, shimPath string) http.Handler 
 			http.Error(w, "internal error reading a shim session", http.StatusInternalServerError)
 			return
 		}
-		serverMsg, err := conn.ReadServerMessage()
+		serverMsgs, err := conn.ReadServerMessages()
 		if err != nil {
 			http.Error(w, fmt.Sprintf("attempt to read data from a closed session: %q", msg.ID), http.StatusBadRequest)
 			return
-		} else if serverMsg == nil {
+		} else if serverMsgs == nil {
 			w.WriteHeader(http.StatusRequestTimeout)
 			return
 		}
+		respBytes, err := json.Marshal(serverMsgs)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("internal error serializing the server-side messages %v", err), http.StatusInternalServerError)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(*serverMsg))
+		w.Write(respBytes)
 	})
 	return mux
 }
