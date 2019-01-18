@@ -135,20 +135,33 @@ func (conn *Connection) SendClientMessage(msg string) error {
 	return nil
 }
 
-// ReadServerMessage reads the next message from the websocket server.
+// ReadServerMessages reads the next messages from the websocket server.
 //
 // The returned error value is non-nill if the connection has been closed.
 //
-// The returned *string value is nil if the error is non-nil, or if the method
+// The returned []string value is nil if the error is non-nil, or if the method
 // times out while waiting for a server message.
-func (conn *Connection) ReadServerMessage() (*string, error) {
+func (conn *Connection) ReadServerMessages() ([]string, error) {
+	var msgs []string
 	select {
 	case serverMsg, ok := <-conn.serverMessages:
 		if !ok {
 			// The server messages channel has been closed.
 			return nil, fmt.Errorf("attempt to read a server message from a closed websocket connection")
 		}
-		return &serverMsg, nil
+		msgs = append(msgs, serverMsg)
+		for {
+			select {
+			case serverMsg, ok := <-conn.serverMessages:
+				if ok {
+					msgs = append(msgs, serverMsg)
+				} else {
+					return msgs, nil
+				}
+			default:
+				return msgs, nil
+			}
+		}
 	case <-time.After(time.Second * 20):
 		return nil, nil
 	}
