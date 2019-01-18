@@ -122,6 +122,23 @@ const (
         }
       }
 
+      self.pendingMessages = [];
+      self.pushing = false;
+      self.push = function() {
+         if (self.pushing) {
+           return;
+         }
+         if (self.pendingMessages.length == 0) {
+           return;
+         }
+         self.pushing = true;
+         var msg = self.pendingMessages.shift();
+         self.xhr('data', msg, null, function() {
+           self.pushing = false;
+           self.push();
+         })
+      }
+
       function poll() {
         if (self.readyState != WebSocketShim.OPEN) {
           return;
@@ -147,7 +164,8 @@ const (
         if (this.readyState != WebSocketShim.OPEN) {
           throw new Error('WebSocket is not yet opened');
         }
-        this.xhr('data', {'id': this._sessionID, 'msg': data});
+        this.pendingMessages.push({'id': this._sessionID, 'msg': data});
+        self.push();
       },
       close: function() {
         if (this.readyState != WebSocketShim.OPEN) {
