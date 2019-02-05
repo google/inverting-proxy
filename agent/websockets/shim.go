@@ -88,7 +88,9 @@ const (
           msgs.forEach(function(msg) {
             self.onmessage({ target: self, data: msg });
           });
-        }
+        } else {
+	  console.error("Received messages but there is no onmessage handler defined");
+	}
       }
       function errorHandler() {
         if (self.onerror) {
