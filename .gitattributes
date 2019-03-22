@@ -1,0 +1,5 @@
+# Ignore vendor 
+vendor/ 
+
+# Ignore license.txt
+third_party/license.txt
