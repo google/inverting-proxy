@@ -30,6 +30,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -46,10 +47,10 @@ import (
 )
 
 const (
-	requestCacheLimit = 1000
-	emailScope        = "email"
-
-	maxBackoffDuration = 100 * time.Millisecond
+	requestCacheLimit      = 1000
+	emailScope             = "email"
+	maxBackoffDuration     = 3 * time.Second
+	firstRetryWaitDuration = time.Millisecond
 )
 
 var (
@@ -64,6 +65,11 @@ var (
 	healthCheckPath      = flag.String("health-check-path", "/", "Path on backend host to issue health checks against.  Defaults to the root.")
 	healthCheckFreq      = flag.Int("health-check-interval-seconds", 0, "Wait time in seconds between health checks.  Set to zero to disable health checks.  Checks disabled by default.")
 	healthCheckUnhealthy = flag.Int("health-check-unhealthy-threshold", 2, "A so-far healthy backend will be marked unhealthy after this many consecutive failures. The minimum value is 1.")
+)
+
+var (
+	// compute the max retry count
+	maxRetryCount = math.Log2(float64(maxBackoffDuration / firstRetryWaitDuration))
 )
 
 func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) (http.Handler, error) {
@@ -129,10 +135,11 @@ func processOneRequest(client *http.Client, hostProxy http.Handler, backendID st
 }
 
 func exponentialBackoffDuration(retryCount uint) time.Duration {
-	targetDuration := (1 << retryCount) * time.Millisecond
-	if targetDuration > maxBackoffDuration {
+	if retryCount > uint(maxRetryCount) {
 		return maxBackoffDuration
 	}
+
+	targetDuration := (1 << retryCount) * firstRetryWaitDuration
 	return targetDuration
 }
 
