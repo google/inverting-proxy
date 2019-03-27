@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"math/rand"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -135,12 +136,21 @@ func processOneRequest(client *http.Client, hostProxy http.Handler, backendID st
 }
 
 func exponentialBackoffDuration(retryCount uint) time.Duration {
+	var targetDuration time.Duration
 	if retryCount > uint(maxRetryCount) {
-		return maxBackoffDuration
+		targetDuration = maxBackoffDuration
+	} else {
+		targetDuration = (1 << retryCount) * firstRetryWaitDuration
 	}
 
-	targetDuration := (1 << retryCount) * firstRetryWaitDuration
+	jitterPercent := 0.1
+	targetDuration = addJitter(targetDuration, jitterPercent)
 	return targetDuration
+}
+
+func addJitter(duration time.Duration, jitterPercent float64) time.Duration {
+	jitter := 1 - jitterPercent + rand.Float64()*(jitterPercent*2)
+	return time.Duration(float64(duration.Nanoseconds())*jitter) * time.Nanosecond
 }
 
 // pollForNewRequests repeatedly reaches out to the proxy server to ask if any pending are available, and then
