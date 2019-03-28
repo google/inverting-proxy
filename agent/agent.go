@@ -49,7 +49,7 @@ const (
 	requestCacheLimit = 1000
 	emailScope        = "email"
 
-	maxBackoffDuration = 100 * time.Millisecond
+	maxBackoffDuration = time.Minute
 )
 
 var (
@@ -129,7 +129,7 @@ func processOneRequest(client *http.Client, hostProxy http.Handler, backendID st
 }
 
 func exponentialBackoffDuration(retryCount uint) time.Duration {
-	targetDuration := (1 << retryCount) * time.Millisecond
+	targetDuration := (1 << retryCount) * 100 * time.Millisecond
 	if targetDuration > maxBackoffDuration {
 		return maxBackoffDuration
 	}
