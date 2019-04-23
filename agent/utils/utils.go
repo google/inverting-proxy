@@ -25,6 +25,8 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"math"
+	"math/rand"
 	"net/http"
 	"sync"
 	"time"
@@ -59,6 +61,20 @@ const (
 	// HeaderRequestStartTime is the name of a response header used by the proxy
 	// to report the start time of a proxied request.
 	HeaderRequestStartTime = "X-Inverting-Proxy-Request-Start-Time"
+
+	// JitterPercent sets the jitter for exponential backoff retry time
+	JitterPercent = 0.1
+
+	// Max time to wait before retry during exponential backoff
+	maxBackoffDuration = 3 * time.Second
+
+	// Time to wait on first retry
+	firstRetryWaitDuration = time.Millisecond
+)
+
+var (
+	// compute the max retry count
+	maxRetryCount = math.Log2(float64(maxBackoffDuration / firstRetryWaitDuration))
 )
 
 // hopHeaders are Hop-by-hop headers. These are removed when received in a response from
@@ -460,4 +476,23 @@ func (rf *ResponseForwarder) Close() error {
 		return fmt.Errorf("Multiple errors closing pipe writers: %s", errs)
 	}
 	return nil
+}
+
+// ExponentialBackoffDuration gets time to wait before retry for exponential
+// backoff
+func ExponentialBackoffDuration(retryCount uint) time.Duration {
+	var targetDuration time.Duration
+	if retryCount > uint(maxRetryCount) {
+		targetDuration = maxBackoffDuration
+	} else {
+		targetDuration = (1 << retryCount) * firstRetryWaitDuration
+	}
+
+	targetDuration = addJitter(targetDuration, JitterPercent)
+	return targetDuration
+}
+
+func addJitter(duration time.Duration, jitterPercent float64) time.Duration {
+	jitter := 1 - jitterPercent + rand.Float64()*(jitterPercent*2)
+	return time.Duration(float64(duration.Nanoseconds())*jitter) * time.Nanosecond
 }

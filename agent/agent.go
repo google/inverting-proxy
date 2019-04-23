@@ -30,8 +30,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"math"
-	"math/rand"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -48,10 +46,8 @@ import (
 )
 
 const (
-	requestCacheLimit      = 1000
-	emailScope             = "email"
-	maxBackoffDuration     = 3 * time.Second
-	firstRetryWaitDuration = time.Millisecond
+	requestCacheLimit = 1000
+	emailScope        = "email"
 )
 
 var (
@@ -66,11 +62,6 @@ var (
 	healthCheckPath      = flag.String("health-check-path", "/", "Path on backend host to issue health checks against.  Defaults to the root.")
 	healthCheckFreq      = flag.Int("health-check-interval-seconds", 0, "Wait time in seconds between health checks.  Set to zero to disable health checks.  Checks disabled by default.")
 	healthCheckUnhealthy = flag.Int("health-check-unhealthy-threshold", 2, "A so-far healthy backend will be marked unhealthy after this many consecutive failures. The minimum value is 1.")
-)
-
-var (
-	// compute the max retry count
-	maxRetryCount = math.Log2(float64(maxBackoffDuration / firstRetryWaitDuration))
 )
 
 func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) (http.Handler, error) {
@@ -135,24 +126,6 @@ func processOneRequest(client *http.Client, hostProxy http.Handler, backendID st
 	}
 }
 
-func exponentialBackoffDuration(retryCount uint) time.Duration {
-	var targetDuration time.Duration
-	if retryCount > uint(maxRetryCount) {
-		targetDuration = maxBackoffDuration
-	} else {
-		targetDuration = (1 << retryCount) * firstRetryWaitDuration
-	}
-
-	jitterPercent := 0.1
-	targetDuration = addJitter(targetDuration, jitterPercent)
-	return targetDuration
-}
-
-func addJitter(duration time.Duration, jitterPercent float64) time.Duration {
-	jitter := 1 - jitterPercent + rand.Float64()*(jitterPercent*2)
-	return time.Duration(float64(duration.Nanoseconds())*jitter) * time.Nanosecond
-}
-
 // pollForNewRequests repeatedly reaches out to the proxy server to ask if any pending are available, and then
 // processes any newly-seen ones.
 func pollForNewRequests(client *http.Client, hostProxy http.Handler, backendID string) {
@@ -161,7 +134,7 @@ func pollForNewRequests(client *http.Client, hostProxy http.Handler, backendID s
 	for {
 		if requests, err := utils.ListPendingRequests(client, *proxy, backendID); err != nil {
 			log.Printf("Failed to read pending requests: %q\n", err.Error())
-			time.Sleep(exponentialBackoffDuration(retryCount))
+			time.Sleep(utils.ExponentialBackoffDuration(retryCount))
 			retryCount++
 		} else {
 			retryCount = 0
