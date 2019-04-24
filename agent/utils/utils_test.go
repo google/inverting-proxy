@@ -219,3 +219,24 @@ func TestResponseForwarderWithProxyHangup(t *testing.T) {
 		t.Errorf("missing expected error forwarding to a closed proxy")
 	}
 }
+
+func TestExponentialBackoffDurationDoesntOverflow(t *testing.T) {
+	maxRetry := uint(40)
+
+	prevDuration := time.Nanosecond * 0
+
+	for i := uint(0); i < maxRetry; i++ {
+		i := ExponentialBackoffDuration(i)
+
+		// Get the minimum acceptable % of the previous retry duration.
+		minAcceptablePercentage := float64(1 - 2*JitterPercent)
+
+		// Have to multiply and divide by 100 because time.Duration can't handle
+		// floats
+		if i < (prevDuration*time.Duration(minAcceptablePercentage*100))/100 {
+			t.Errorf("duration shrank too much. Old: %d, Curr: %d", prevDuration, i)
+		}
+
+		prevDuration = i
+	}
+}

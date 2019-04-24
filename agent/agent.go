@@ -48,8 +48,6 @@ import (
 const (
 	requestCacheLimit = 1000
 	emailScope        = "email"
-
-	maxBackoffDuration = 100 * time.Millisecond
 )
 
 var (
@@ -128,14 +126,6 @@ func processOneRequest(client *http.Client, hostProxy http.Handler, backendID st
 	}
 }
 
-func exponentialBackoffDuration(retryCount uint) time.Duration {
-	targetDuration := (1 << retryCount) * time.Millisecond
-	if targetDuration > maxBackoffDuration {
-		return maxBackoffDuration
-	}
-	return targetDuration
-}
-
 // pollForNewRequests repeatedly reaches out to the proxy server to ask if any pending are available, and then
 // processes any newly-seen ones.
 func pollForNewRequests(client *http.Client, hostProxy http.Handler, backendID string) {
@@ -144,7 +134,7 @@ func pollForNewRequests(client *http.Client, hostProxy http.Handler, backendID s
 	for {
 		if requests, err := utils.ListPendingRequests(client, *proxy, backendID); err != nil {
 			log.Printf("Failed to read pending requests: %q\n", err.Error())
-			time.Sleep(exponentialBackoffDuration(retryCount))
+			time.Sleep(utils.ExponentialBackoffDuration(retryCount))
 			retryCount++
 		} else {
 			retryCount = 0
