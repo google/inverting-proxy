@@ -1,15 +1,20 @@
 build:	test
 	go build ./app
-	go build -o ${GOPATH}/bin/proxy-forwarding-agent ./agent/agent.go
 
-test:	vet
+test:	buildagent
 	go test ./agent/utils/...
 	go test -count 1 ./agent/agent_test.go
 
-vet:	fmt
+buildagent: vet
+	go build -o ${GOPATH}/bin/proxy-forwarding-agent ./agent/agent.go
+
+vet:	deps
 	go vet ./agent/utils/...
 	go vet ./agent/agent.go
 	go vet ./app/...
+
+deps:	fmt
+	go get ./...
 
 fmt:	FORCE
 	gofmt -w ./
