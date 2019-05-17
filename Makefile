@@ -6,10 +6,13 @@ test:	vet
 	go test ./agent/utils/...
 	go test -count 1 ./agent/agent_test.go
 
-vet:	fmt
+vet:	deps
 	go vet ./agent/utils/...
 	go vet ./agent/agent.go
 	go vet ./app/...
+
+deps:	fmt
+	go get ./...
 
 fmt:	FORCE
 	gofmt -w ./
