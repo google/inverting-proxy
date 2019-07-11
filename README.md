@@ -15,7 +15,7 @@ is required for traditional reverse proxies:
 
 ## Disclaimer
 
-[This is not an official Google product](https://developers.google.com/open-source/projects#some-projects-say-that-they-are-not-an-official-google-product--what------does-that-mean)
+[This is not an official Google product](https://opensource.google.com/docs/releasing/publishing/#disclaimer)
 
 ## Background
 
@@ -49,9 +49,8 @@ This project defines two components:
 1. Something that we are calling the "Inverting Proxy"
 2. An agent that runs alongside a backend and forwards requests to it
 
-The inverting proxy can be run on App Engine. It requires incoming requests be
-authenticated via the [Users API](https://cloud.google.com/appengine/docs/python/users/)
-and forwards those requests to the appropriate backend, via the agent.
+The inverting proxy receives incoming requests and forwards those requests to
+the appropriate backend, via the agent.
 
 Since neither the backend nor the agent will be accessible from the public
 internet, requests are not directly forwarded to the backend. Instead,
@@ -96,8 +95,14 @@ There are two components required for the inverting proxy to work:
 The inverting proxy serves the same roll as a reverse proxy, but additionally
 inverts the direction of traffic to the agent.
 
-We implement the inverting proxy as an App Engine app. The app is written in
-Go and its source code is under the 'app' subdirectory.
+There are two different versions of the inverting proxy: one that runs in
+App Engine, and one that runs as a stand-alone binary. The App Engine version
+requires incoming requests be authenticated via the
+[Users API](https://cloud.google.com/appengine/docs/python/users/).
+
+Both versions of the proxy are written in Go. The source code for the App Engine
+version is under the 'app' subdirectory, and the source code for the stand-alone
+version is under the 'server' subdirectory.
 
 ### Forwarding Agent
 
@@ -190,6 +195,7 @@ And then you can access your backend by vising https://${PROJECT_ID}.appspot.com
 
 ## Limitations
 
-Currently, the inverting proxy only supports HTTP requests. In particular,
-websockets are not supported, so you have to use an adapter like socket.io
-if you want to use the inverting proxy with a service that requires websockets.
+Currently, the App Engine version of the inverting proxy only supports HTTP
+requests. In particular, websockets are not supported, so you have to use an
+adapter like socket.io if you want to use the inverting proxy with a service
+that requires websockets.

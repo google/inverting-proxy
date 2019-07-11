@@ -17,211 +17,24 @@ limitations under the License.
 package main_test
 
 import (
-	"bufio"
 	"bytes"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
-	"math/rand"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/google/inverting-proxy/agent/utils"
-	"golang.org/x/net/context"
+	"context"
 )
-
-// pendingRequest represents a frontend request
-type pendingRequest struct {
-	startTime time.Time
-	req       *http.Request
-	respChan  chan *http.Response
-}
-
-func newPendingRequest(r *http.Request) *pendingRequest {
-	return &pendingRequest{
-		startTime: time.Now(),
-		req:       r,
-		respChan:  make(chan *http.Response),
-	}
-}
-
-type proxy struct {
-	t             *testing.T
-	requestIDs    chan string
-	randGenerator *rand.Rand
-
-	// protects the map below
-	sync.Mutex
-	requests map[string]*pendingRequest
-}
-
-func newProxy(t *testing.T) *proxy {
-	return &proxy{
-		t:             t,
-		requestIDs:    make(chan string),
-		randGenerator: rand.New(rand.NewSource(time.Now().UnixNano())),
-		requests:      make(map[string]*pendingRequest),
-	}
-}
-
-func (p *proxy) handleAgentPostResponse(w http.ResponseWriter, r *http.Request, requestID string) {
-	p.Lock()
-	pending, ok := p.requests[requestID]
-	p.Unlock()
-	if !ok {
-		p.t.Logf("Could not find pending request: %q", requestID)
-		http.NotFound(w, r)
-		return
-	}
-	resp, err := http.ReadResponse(bufio.NewReader(r.Body), pending.req)
-	if err != nil {
-		p.t.Logf("Could not parse response to request %q: %v", requestID, err)
-		http.Error(w, "Failure parsing request body", http.StatusBadRequest)
-		return
-	}
-	// We want to track whether or not the body has finished being read so that we can
-	// make sure that this method does not return until after that. However, we do not
-	// want to block the sending of the response to the client while it is being read.
-	//
-	// To accommodate both goals, we replace the response body with a pipereader, start
-	// forwarding the response immediately, and then copy the original body to the
-	// corresponding pipewriter.
-	respBody := resp.Body
-	defer respBody.Close()
-
-	pr, pw := io.Pipe()
-	defer pw.Close()
-
-	resp.Body = pr
-	select {
-	case <-r.Context().Done():
-		return
-	case pending.respChan <- resp:
-	}
-	if _, err := io.Copy(pw, respBody); err != nil {
-		p.t.Logf("Could not read response to request %q: %v", requestID, err)
-		http.Error(w, "Failure reading request body", http.StatusInternalServerError)
-	}
-}
-
-func (p *proxy) handleAgentGetRequest(w http.ResponseWriter, r *http.Request, requestID string) {
-	p.Lock()
-	pending, ok := p.requests[requestID]
-	p.Unlock()
-	if !ok {
-		p.t.Logf("Could not find pending request: %q", requestID)
-		http.NotFound(w, r)
-		return
-	}
-	p.t.Logf("Returning pending request: %q", requestID)
-	w.Header().Set(utils.HeaderRequestStartTime, pending.startTime.Format(time.RFC3339Nano))
-	w.WriteHeader(http.StatusOK)
-	pending.req.Write(w)
-}
-
-// waitForRequestIDs blocks until at least one request ID is available, and then returns
-// a slice of all of the IDs available at that time.
-//
-// Note that any IDs returned by this method will never be returned again.
-func (p *proxy) waitForRequestIDs(ctx context.Context) []string {
-	var requestIDs []string
-	select {
-	case <-ctx.Done():
-		return nil
-	case <-time.After(30 * time.Second):
-		return nil
-	case id := <-p.requestIDs:
-		requestIDs = append(requestIDs, id)
-	}
-	for {
-		select {
-		case id := <-p.requestIDs:
-			requestIDs = append(requestIDs, id)
-		default:
-			return requestIDs
-		}
-	}
-}
-
-func (p *proxy) handleAgentListRequests(w http.ResponseWriter, r *http.Request) {
-	requestIDs := p.waitForRequestIDs(r.Context())
-	respJSON, err := json.Marshal(requestIDs)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failure serializing the request IDs: %v", err), http.StatusInternalServerError)
-		return
-	}
-	p.t.Logf("Reporting pending requests: %s", respJSON)
-	w.WriteHeader(http.StatusOK)
-	w.Write(respJSON)
-}
-
-func (p *proxy) handleAgentRequest(w http.ResponseWriter, r *http.Request, backendID string) {
-	requestID := r.Header.Get(utils.HeaderRequestID)
-	if requestID == "" {
-		p.t.Logf("Received new backend list request from %q", backendID)
-		p.handleAgentListRequests(w, r)
-		return
-	}
-	if r.Method == http.MethodPost {
-		p.t.Logf("Received new backend post request from %q", backendID)
-		p.handleAgentPostResponse(w, r, requestID)
-		return
-	}
-	p.t.Logf("Received new backend get request from %q", backendID)
-	p.handleAgentGetRequest(w, r, requestID)
-}
-
-func (p *proxy) newID() string {
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%d", p.randGenerator.Int63())))
-	return fmt.Sprintf("%x", sum)
-}
-
-func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if backendID := r.Header.Get(utils.HeaderBackendID); backendID != "" {
-		p.handleAgentRequest(w, r, backendID)
-		return
-	}
-	id := p.newID()
-	p.t.Logf("Received new frontend request %q", id)
-	pending := newPendingRequest(r)
-	p.Lock()
-	p.requests[id] = pending
-	p.Unlock()
-
-	// Enqueue the request
-	select {
-	case <-r.Context().Done():
-		// The client request was cancelled
-		p.t.Logf("Timeout waiting to enqueue the request ID for %q", id)
-		return
-	case p.requestIDs <- id:
-	}
-	p.t.Logf("Request %q enqueued after %s", id, time.Since(pending.startTime))
-
-	// Pull out and copy the response
-	select {
-	case <-r.Context().Done():
-		// The client request was cancelled
-		p.t.Logf("Timeout waiting for the response to %q", id)
-		return
-	case resp := <-pending.respChan:
-		defer resp.Body.Close()
-		w.WriteHeader(resp.StatusCode)
-		io.Copy(w, resp.Body)
-		return
-	}
-	p.t.Logf("Response for %q received after %s", id, time.Since(pending.startTime))
-}
 
 func checkRequest(proxyURL, testPath, want string, timeout time.Duration) error {
 	client := &http.Client{
@@ -240,6 +53,37 @@ func checkRequest(proxyURL, testPath, want string, timeout time.Duration) error 
 		return fmt.Errorf("unexpected proxy frontend response; got %q, want %q", got, want)
 	}
 	return nil
+}
+
+func RunLocalProxy(ctx context.Context, t *testing.T) (int, error) {
+	// This assumes that "Make build" has been run
+	proxyArgs := strings.Join(append(
+		[]string{"${GOPATH}/bin/inverting-proxy"},
+		"--port=0"),
+		" ")
+	proxyCmd := exec.CommandContext(ctx, "/bin/bash", "-c", proxyArgs)
+
+	var proxyOut bytes.Buffer
+	proxyCmd.Stdout = &proxyOut
+	proxyCmd.Stderr = &proxyOut
+	if err := proxyCmd.Start(); err != nil {
+		t.Fatalf("Failed to start the inverting-proxy binary: %v", err)
+	}
+	go func() {
+		err := proxyCmd.Wait()
+		t.Logf("Proxy result: %v, stdout/stderr: %q", err, proxyOut.String())
+	}()
+	for i := 0; i < 30; i++ {
+		for _, line := range strings.Split(proxyOut.String(), "\n") {
+			if strings.Contains(line, "Listening on [::]:") {
+				portStr := strings.TrimSpace(strings.Split(line, "Listening on [::]:")[1])
+				return strconv.Atoi(portStr)
+			}
+		}
+		t.Logf("Waiting for the locally running proxy to start...")
+		time.Sleep(1 * time.Second)
+	}
+	return 0, fmt.Errorf("Locally-running proxy failed to start up in time: %q", proxyOut.String())
 }
 
 func TestWithInMemoryProxyAndBackend(t *testing.T) {
@@ -285,26 +129,30 @@ func TestWithInMemoryProxyAndBackend(t *testing.T) {
 		}
 	}))
 
-	p := httptest.NewServer(newProxy(t))
 	go func() {
 		<-ctx.Done()
 		backend.Close()
-		p.Close()
 		fakeMetadata.Close()
 	}()
 	backendURL, err := url.Parse(backend.URL)
 	if err != nil {
 		t.Fatalf("Failed to parse the backend URL: %v", err)
 	}
-	t.Logf("Started backend at localhost:%s and proxy at %q", backendURL.Port(), p.URL)
+	proxyPort, err := RunLocalProxy(ctx, t)
+	proxyURL := fmt.Sprintf("http://localhost:%d", proxyPort)
+	if err != nil {
+		t.Fatalf("Failed to run the local inverting proxy: %v", err)
+	}
+	t.Logf("Started backend at localhost:%s and proxy at %s", backendURL.Port(), proxyURL)
 
 	// This assumes that "Make build" has been run
 	args := strings.Join(append(
 		[]string{"${GOPATH}/bin/proxy-forwarding-agent"},
 		"--debug=true",
 		"--backend=testBackend",
-		"--proxy", p.URL+"/",
-		"--host=localhost:"+backendURL.Port()),
+		"--proxy", proxyURL+"/",
+		"--host=localhost:"+backendURL.Port(),
+		"--inject-banner=\\<div\\>FOO\\</div\\>"),
 		" ")
 	agentCmd := exec.CommandContext(ctx, "/bin/bash", "-c", args)
 
@@ -326,7 +174,7 @@ func TestWithInMemoryProxyAndBackend(t *testing.T) {
 	// We give this initial request a long time to complete, as the agent takes
 	// a long time to start up.
 	testPath := "/some/request/path"
-	if err := checkRequest(p.URL, testPath, testPath, time.Second); err != nil {
+	if err := checkRequest(proxyURL, testPath, testPath, time.Second); err != nil {
 		t.Fatalf("Failed to send the initial request: %v", err)
 	}
 
@@ -337,7 +185,7 @@ func TestWithInMemoryProxyAndBackend(t *testing.T) {
 		//
 		// The specific value was chosen by running the test in a loop 100 times and
 		// incrementing the value until all 100 runs passed.
-		if err := checkRequest(p.URL, testPath, testPath, 5*time.Millisecond); err != nil {
+		if err := checkRequest(proxyURL, testPath, testPath, 100*time.Millisecond); err != nil {
 			t.Fatalf("Failed to send request %d: %v", i, err)
 		}
 	}

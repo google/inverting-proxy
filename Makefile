@@ -1,12 +1,15 @@
 build:	test
 	go build ./app
 
-test:	buildagent
+test:	buildagent buildserver
 	go test ./agent/utils/...
 	go test -count 1 ./agent/agent_test.go
 
 buildagent: vet
 	go build -o ${GOPATH}/bin/proxy-forwarding-agent ./agent/agent.go
+
+buildserver: vet
+	go build -o ${GOPATH}/bin/inverting-proxy ./server/server.go
 
 vet:	deps
 	go vet ./agent/utils/...
