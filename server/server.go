@@ -35,8 +35,8 @@ import (
 	"sync"
 	"time"
 
+	"context"
 	"github.com/google/inverting-proxy/agent/utils"
-	"golang.org/x/net/context"
 )
 
 var (
