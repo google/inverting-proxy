@@ -1,5 +1,5 @@
 /*
-Copyright 2018 Google Inc. All rights reserved.
+Copyright 2019 Google Inc. All rights reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -14,64 +14,61 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package main_test
+// Command websockets launches a reverse proxy that can be used to
+// manually test changes to the code in the agent/websockets package
+//
+// Example usage:
+//   go build -o ~/bin/test-websocket-sever testing/websockets.go
+//   ~/bin/test-websocket-server --port 8081 --backend http://localhost:8082
+package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
+	"html/template"
 	"io"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"testing"
 	"time"
-
-	"context"
 )
 
-func checkRequest(proxyURL, testPath, want string, timeout time.Duration) error {
-	client := &http.Client{
-		Timeout: timeout,
-	}
-	resp, err := client.Get(proxyURL + testPath)
-	if err != nil {
-		return fmt.Errorf("failed to issue a frontend GET request: %v", err)
-	}
-	defer resp.Body.Close()
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read the response body: %v", err)
-	}
-	if got := string(body); got != want {
-		return fmt.Errorf("unexpected proxy frontend response; got %q, want %q", got, want)
-	}
-	return nil
-}
+const responseTemplate = `<html>
+  <head>Proxied response from {{.Path}}</head>
+  <body>Received a request to {{.Path}}</body>
+</html>
+`
 
-func RunLocalProxy(ctx context.Context, t *testing.T) (int, error) {
+var (
+	port     = flag.Int("port", 0, "Port on which to listen")
+	respTmpl = template.Must(template.New("response").Parse(responseTemplate))
+)
+
+func RunLocalProxy(ctx context.Context) (int, error) {
 	// This assumes that "Make build" has been run
-	proxyArgs := strings.Join(append(
-		[]string{"${GOPATH}/bin/inverting-proxy"},
-		"--port=0"),
-		" ")
+	proxyArgs := fmt.Sprintf("${GOPATH}/bin/inverting-proxy --port=%d", *port)
 	proxyCmd := exec.CommandContext(ctx, "/bin/bash", "-c", proxyArgs)
 
 	var proxyOut bytes.Buffer
 	proxyCmd.Stdout = &proxyOut
 	proxyCmd.Stderr = &proxyOut
 	if err := proxyCmd.Start(); err != nil {
-		t.Fatalf("Failed to start the inverting-proxy binary: %v", err)
+		log.Fatalf("Failed to start the inverting-proxy binary: %v", err)
 	}
 	go func() {
 		err := proxyCmd.Wait()
-		t.Logf("Proxy result: %v, stdout/stderr: %q", err, proxyOut.String())
+		log.Printf("Proxy result: %v, stdout/stderr: %q", err, proxyOut.String())
 	}()
 	for i := 0; i < 30; i++ {
 		for _, line := range strings.Split(proxyOut.String(), "\n") {
@@ -80,28 +77,26 @@ func RunLocalProxy(ctx context.Context, t *testing.T) (int, error) {
 				return strconv.Atoi(portStr)
 			}
 		}
-		t.Logf("Waiting for the locally running proxy to start...")
+		log.Printf("Waiting for the locally running proxy to start...")
 		time.Sleep(1 * time.Second)
 	}
 	return 0, fmt.Errorf("Locally-running proxy failed to start up in time: %q", proxyOut.String())
 }
 
-func TestWithInMemoryProxyAndBackend(t *testing.T) {
+func main() {
+	flag.Parse()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	backendHomeDir, err := ioutil.TempDir("", "backend-home")
 	if err != nil {
-		t.Fatalf("Failed to set up a temporary home directory for the test: %v", err)
+		log.Fatalf("Failed to set up a temporary home directory for the test: %v", err)
 	}
 	gcloudCfg := filepath.Join(backendHomeDir, ".config", "gcloud")
 	if err := os.MkdirAll(gcloudCfg, os.ModePerm); err != nil {
-		t.Fatalf("Failed to set up a temporary home directory for the test: %v", err)
+		log.Fatalf("Failed to set up a temporary home directory for the test: %v", err)
 	}
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Logf("Responding to backend request to %q", r.URL.Path)
-		w.Write([]byte(r.URL.Path))
-	}))
 	fakeMetadata := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Emulate slow responses from the metadata server, to check that the agent
 		// is appropriately caching the results.
@@ -123,10 +118,28 @@ func TestWithInMemoryProxyAndBackend(t *testing.T) {
 		fakeToken.ExpiresInSec = 1000
 		fakeToken.TokenType = "Bearer"
 		if err := json.NewEncoder(w).Encode(&fakeToken); err != nil {
-			t.Logf("Failed to encode a fake service account credential: %v", err)
+			log.Printf("Failed to encode a fake service account credential: %v", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+	}))
+
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("Responding to backend request to %q", r.URL.Path)
+
+		var templateBuf bytes.Buffer
+		templateVals := &struct {
+			Path string
+		}{
+			Path: r.URL.Path,
+		}
+		if err := respTmpl.Execute(&templateBuf, templateVals); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Add("Content-Type", "text/html")
+		w.Write(templateBuf.Bytes())
 	}))
 
 	go func() {
@@ -134,16 +147,17 @@ func TestWithInMemoryProxyAndBackend(t *testing.T) {
 		backend.Close()
 		fakeMetadata.Close()
 	}()
+
 	backendURL, err := url.Parse(backend.URL)
 	if err != nil {
-		t.Fatalf("Failed to parse the backend URL: %v", err)
+		log.Fatalf("Failed to parse the backend URL: %v", err)
 	}
-	proxyPort, err := RunLocalProxy(ctx, t)
+	proxyPort, err := RunLocalProxy(ctx)
 	proxyURL := fmt.Sprintf("http://localhost:%d", proxyPort)
 	if err != nil {
-		t.Fatalf("Failed to run the local inverting proxy: %v", err)
+		log.Fatalf("Failed to run the local inverting proxy: %v", err)
 	}
-	t.Logf("Started backend at localhost:%s and proxy at %s", backendURL.Port(), proxyURL)
+	log.Printf("Started backend at localhost:%s and proxy at %s", backendURL.Port(), proxyURL)
 
 	// This assumes that "Make build" has been run
 	args := strings.Join(append(
@@ -152,41 +166,22 @@ func TestWithInMemoryProxyAndBackend(t *testing.T) {
 		"--backend=testBackend",
 		"--proxy", proxyURL+"/",
 		"--host=localhost:"+backendURL.Port(),
-		"--inject-banner=\\<div\\>FOO\\</div\\>"),
+		"--inject-banner=\\<div\\ style=\"width:100%;color:white;background-color:#1a73e8;height:24;font-size:20;padding:8px\"\\>Inverting\\ Proxy\\</div\\>"),
 		" ")
 	agentCmd := exec.CommandContext(ctx, "/bin/bash", "-c", args)
-
-	var out bytes.Buffer
-	agentCmd.Stdout = &out
-	agentCmd.Stderr = &out
+	agentCmd.Stdout = os.Stdout
+	agentCmd.Stderr = os.Stderr
 	agentCmd.Env = append(os.Environ(), "PATH=", "HOME="+backendHomeDir, "GCE_METADATA_HOST="+strings.TrimPrefix(fakeMetadata.URL, "http://"))
 	if err := agentCmd.Start(); err != nil {
-		t.Fatalf("Failed to start the agent binary: %v", err)
+		log.Fatalf("Failed to start the agent binary: %v", err)
 	}
 	defer func() {
 		cancel()
 		err := agentCmd.Wait()
-		t.Logf("Agent result: %v, stdout/stderr: %q", err, out.String())
+		log.Printf("Agent result: %v", err)
 	}()
 
-	// Send one request through the proxy to make sure the agent has come up.
-	//
-	// We give this initial request a long time to complete, as the agent takes
-	// a long time to start up.
-	testPath := "/some/request/path"
-	if err := checkRequest(proxyURL, testPath, testPath, time.Second); err != nil {
-		t.Fatalf("Failed to send the initial request: %v", err)
-	}
-
-	for i := 0; i < 10; i++ {
-		// The timeout below was chosen to be overly generous to prevent test flakiness.
-		//
-		// This has the consequence that it will only catch severe latency regressions.
-		//
-		// The specific value was chosen by running the test in a loop 100 times and
-		// incrementing the value until all 100 runs passed.
-		if err := checkRequest(proxyURL, testPath, testPath, 100*time.Millisecond); err != nil {
-			t.Fatalf("Failed to send request %d: %v", i, err)
-		}
-	}
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt)
+	<-sigChan
 }

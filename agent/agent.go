@@ -27,17 +27,21 @@ limitations under the License.
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"text/template"
 	"time"
 
+	"context"
 	"github.com/golang/groupcache/lru"
-	"golang.org/x/net/context"
 	"golang.org/x/oauth2/google"
 	compute "google.golang.org/api/compute/v1"
 
@@ -48,6 +52,16 @@ import (
 const (
 	requestCacheLimit = 1000
 	emailScope        = "email"
+
+	acceptHeader         = "Accept"
+	contentTypeHeader    = "Content-Type"
+	refererHeader        = "Referer"
+	frameWrapperTemplate = `<html>
+  <body style="margin:0px">
+    {{.Banner}}
+    <iframe height="100%" width="100%" style="border:0px" src="{{.TargetURL}}"></iframe>
+  </body>
+</html>`
 )
 
 var (
@@ -57,11 +71,14 @@ var (
 	backendID            = flag.String("backend", "", "Unique ID for this backend.")
 	debug                = flag.Bool("debug", false, "Whether or not to print debug log messages")
 	forwardUserID        = flag.Bool("forward-user-id", false, "Whether or not to include the ID (email address) of the end user in requests to the backend")
+	injectBanner         = flag.String("inject-banner", "", "HTML snippet to inject in served webpages Whether or not to replace websockets with a shim")
 	shimWebsockets       = flag.Bool("shim-websockets", false, "Whether or not to replace websockets with a shim")
 	shimPath             = flag.String("shim-path", "", "Path under which to handle websocket shim requests")
 	healthCheckPath      = flag.String("health-check-path", "/", "Path on backend host to issue health checks against.  Defaults to the root.")
 	healthCheckFreq      = flag.Int("health-check-interval-seconds", 0, "Wait time in seconds between health checks.  Set to zero to disable health checks.  Checks disabled by default.")
 	healthCheckUnhealthy = flag.Int("health-check-unhealthy-threshold", 2, "A so-far healthy backend will be marked unhealthy after this many consecutive failures. The minimum value is 1.")
+
+	frameWrapperTmpl = template.Must(template.New("frame-wrapper").Parse(frameWrapperTemplate))
 )
 
 func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) (http.Handler, error) {
@@ -70,10 +87,65 @@ func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) 
 		Host:   host,
 	})
 	hostProxy.FlushInterval = 100 * time.Millisecond
-	if shimPath == "" {
-		return hostProxy, nil
+	var wrappedProxy http.Handler = hostProxy
+	if shimPath != "" {
+		var err error
+		wrappedProxy, err = websockets.Proxy(ctx, hostProxy, host, shimPath, injectShimCode)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return websockets.Proxy(ctx, hostProxy, host, shimPath, injectShimCode)
+	if *injectBanner == "" {
+		return wrappedProxy, nil
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			wrappedProxy.ServeHTTP(w, r)
+			return
+		}
+		if accept := r.Header.Get(acceptHeader); !strings.Contains(accept, "text/html") {
+			wrappedProxy.ServeHTTP(w, r)
+			return
+		}
+		if referer := r.Header.Get(refererHeader); referer != "" {
+			refererURL, err := url.Parse(referer)
+			if err == nil && refererURL.Host == r.Host && refererURL.Path == r.URL.Path {
+				// The page is already framed
+				wrappedProxy.ServeHTTP(w, r)
+				return
+			}
+		}
+		responseRecorder := httptest.NewRecorder()
+		wrappedProxy.ServeHTTP(responseRecorder, r)
+		result := responseRecorder.Result()
+		if result.StatusCode != http.StatusOK || !strings.Contains(result.Header.Get(contentTypeHeader), "html") {
+			for name, vals := range result.Header {
+				for _, val := range vals {
+					w.Header().Add(name, val)
+				}
+			}
+			w.WriteHeader(result.StatusCode)
+			io.Copy(w, result.Body)
+			result.Body.Close()
+			return
+		}
+
+		var templateBuf bytes.Buffer
+		templateVals := &struct {
+			TargetURL string
+			Banner    string
+		}{
+			TargetURL: r.URL.String(),
+			Banner:    *injectBanner,
+		}
+		if err := frameWrapperTmpl.Execute(&templateBuf, templateVals); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Write(templateBuf.Bytes())
+	})
+	return mux, nil
 }
 
 // forwardRequest forwards the given request from the proxy to
