@@ -32,7 +32,7 @@ import (
 	"sync/atomic"
 	"text/template"
 
-	"golang.org/x/net/context"
+	"context"
 )
 
 const (

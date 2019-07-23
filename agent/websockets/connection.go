@@ -22,8 +22,8 @@ import (
 	"sync"
 	"time"
 
+	"context"
 	"github.com/gorilla/websocket"
-	"golang.org/x/net/context"
 )
 
 // Connection implements a websocket client connection.
