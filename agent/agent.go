@@ -42,11 +42,14 @@ import (
 	compute "google.golang.org/api/compute/v1"
 
 	"github.com/google/inverting-proxy/agent/utils"
+	//"./utils"
 	"github.com/google/inverting-proxy/agent/websockets"
+	"github.com/google/uuid"
 )
 
 const (
 	requestCacheLimit = 1000
+	cookieCacheLimit  = 10
 	emailScope        = "email"
 )
 
@@ -62,13 +65,47 @@ var (
 	healthCheckPath      = flag.String("health-check-path", "/", "Path on backend host to issue health checks against.  Defaults to the root.")
 	healthCheckFreq      = flag.Int("health-check-interval-seconds", 0, "Wait time in seconds between health checks.  Set to zero to disable health checks.  Checks disabled by default.")
 	healthCheckUnhealthy = flag.Int("health-check-unhealthy-threshold", 2, "A so-far healthy backend will be marked unhealthy after this many consecutive failures. The minimum value is 1.")
+	cookieLRU            *utils.CookieCache
 )
+
+func director(r *http.Request) {
+
+}
+
+func modifyResponse(res *http.Response) error {
+	// 	// Remove cookies from res.header and add to the cookie jar instead
+	// 	// how to access cookie jar in LRU
+	// 	// make sure to not remove the session cookie if that needs to be set
+	return nil
+}
 
 func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) (http.Handler, error) {
 	hostProxy := httputil.NewSingleHostReverseProxy(&url.URL{
 		Scheme: "http",
 		Host:   host,
 	})
+
+	hostProxy.Director = director
+	hostProxy.ModifyResponse = modifyResponse
+
+	// check if request has session cookie
+	// 		if it does, check the lru to get the cookie jar
+	//			if no entry in LRU, add the cookie jar from the request to the LRU
+	// 		if no session cookie
+	//			set a flag
+	// hostProxy.Director = func(req *http.Request) {
+	// 	sessionCookie, err := req.Cookie("session_id")
+
+	// 	if err != nil {
+	// 		// No session cookie, generate it
+	// 		sessionID := uuid.New()
+	// 		log.Printf("%s", sessionID)
+	// 	} else {
+	// 		log.Printf(sessionCookie.Name)
+	// 	}
+
+	// }
+
 	hostProxy.FlushInterval = 100 * time.Millisecond
 	if shimPath == "" {
 		return hostProxy, nil
@@ -83,7 +120,18 @@ func forwardRequest(client *http.Client, hostProxy http.Handler, request *utils.
 	if *forwardUserID {
 		httpRequest.Header.Add(utils.HeaderUserID, request.User)
 	}
-	responseForwarder, err := utils.NewResponseForwarder(client, *proxy, request.BackendID, request.RequestID)
+
+	var sessionID string
+	sessionCookie, err := httpRequest.Cookie("session-id")
+	// No session cookie found
+	if err != nil {
+		// Assign a session ID
+		sessionID = uuid.New().String()
+		// Cache the cookie jar of the current session
+		cookieLRU.AddJarToCache(sessionID, &client.Jar)
+	}
+
+	responseForwarder, err := utils.NewResponseForwarder(client, *proxy, request.BackendID, request.RequestID, sessionID)
 	if err != nil {
 		return fmt.Errorf("failed to create the response forwarder: %v", err)
 	}
@@ -246,4 +294,7 @@ func main() {
 	if err := runAdapter(); err != nil {
 		log.Fatal(err.Error())
 	}
+
+	cookieLRU, err := utils.NewCookieCache(cookieCacheLimit)
+
 }
