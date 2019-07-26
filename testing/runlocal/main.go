@@ -42,6 +42,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const responseTemplate = `<html>
@@ -81,6 +83,14 @@ func RunLocalProxy(ctx context.Context) (int, error) {
 		time.Sleep(1 * time.Second)
 	}
 	return 0, fmt.Errorf("Locally-running proxy failed to start up in time: %q", proxyOut.String())
+}
+
+func setCookie(w http.ResponseWriter, r *http.Request) {
+	cookie := http.Cookie{
+		Name:  "test-cookie",
+		Value: "fake value",
+	}
+	http.SetCookie(w, &cookie)
 }
 
 func main() {
@@ -124,7 +134,14 @@ func main() {
 		}
 	}))
 
+	sessionCookie := &http.Cookie{
+		Name:  "session-id",
+		Value: uuid.New().String(),
+	}
+
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.SetCookie(w, sessionCookie)
+		log.Printf("Added cookie %s with value %s", sessionCookie.Name, sessionCookie.Value)
 		log.Printf("Responding to backend request to %q", r.URL.Path)
 
 		var templateBuf bytes.Buffer
@@ -158,6 +175,20 @@ func main() {
 		log.Fatalf("Failed to run the local inverting proxy: %v", err)
 	}
 	log.Printf("Started backend at localhost:%s and proxy at %s", backendURL.Port(), proxyURL)
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	setCookie(resp, req)
+
+	log.Print("read cookie????")
+
+	if resp.Code != http.StatusTeapot {
+		log.Printf("Status code is %v", resp.Code)
+	}
+	if len(resp.Header().Get("test-cookie")) > 0 {
+		log.Print("Cookie set")
+		log.Printf("cookie : %v", resp.Header().Get("test-cookie"))
+	}
 
 	// This assumes that "Make build" has been run
 	args := strings.Join(append(

@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/compute/metadata"
+	"github.com/golang/groupcache/lru"
 )
 
 const (
@@ -103,6 +104,25 @@ type ForwardedRequest struct {
 	StartTime time.Time
 
 	Contents *http.Request
+}
+
+// CookieCache represents a LRU cache to store session ID -> CookieJar
+type CookieCache struct {
+	cache *lru.Cache
+	sync.Mutex
+}
+
+// NewCookieCache initializes an LRU cache with cookieCacheLimit entries
+func NewCookieCache(cookieCacheLimit int) (*CookieCache, error) {
+	return &CookieCache{
+		cache: lru.New(cookieCacheLimit),
+	}, nil
+}
+
+func (cj *CookieCache) AddJarToCache(sessionID string, jar *http.CookieJar) {
+	cj.Lock()
+	cj.cache.Add(sessionID, jar)
+	cj.Unlock()
 }
 
 // RequestCallback defines how the caller of `ReadRequest` uses the request that was read.
@@ -281,7 +301,7 @@ func ReadRequest(client *http.Client, proxyHost, backendID, requestID string, ca
 }
 
 // ResponseForwarder implements http.ResponseWriter by dumping a wire-compatible
-// representation of the response to 'proxyWriter' field.
+// representation of the response to 'proxyWriter' field.ResponseForwarder
 //
 // ResponseForwarder is used by the agent to forward a response from the backend
 // target to the inverting proxy.
@@ -325,7 +345,7 @@ type ResponseForwarder struct {
 
 // NewResponseForwarder constructs a new ResponseForwarder that forwards to the
 // given proxy for the specified request.
-func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID string) (*ResponseForwarder, error) {
+func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID string, sessionID string) (*ResponseForwarder, error) {
 	// The contortions below support streaming.
 	//
 	// There are two pipes:
@@ -369,7 +389,7 @@ func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID s
 		close(proxyClientErrChan)
 	}()
 
-	return &ResponseForwarder{
+	responseForwarder := &ResponseForwarder{
 		response: &http.Response{
 			Proto:      "HTTP/1.1",
 			ProtoMajor: 1,
@@ -385,7 +405,20 @@ func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID s
 		proxyClientErrors:  proxyClientErrChan,
 		forwardingErrors:   forwardingErrChan,
 		writeErrors:        writeErrChan,
-	}, nil
+	}
+
+	if sessionID != "" {
+		sessionCookie := http.Cookie{
+			Name:     "session-id",
+			Value:    sessionID,
+			Secure:   true,
+			HttpOnly: true,
+			//need expiry to be controlled by flag
+		}
+
+		responseForwarder.response.Header.Add("Set-Cookie", sessionCookie.String())
+	}
+	return responseForwarder, nil
 }
 
 func (rf *ResponseForwarder) notify() {
