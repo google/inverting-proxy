@@ -119,10 +119,18 @@ func NewCookieCache(cookieCacheLimit int) (*CookieCache, error) {
 	}, nil
 }
 
-func (cj *CookieCache) AddJarToCache(sessionID string, jar *http.CookieJar) {
+// func (cj *CookieCache) Cookies(u *url.URL) (cookies []*http.Cookie) {
+// 	return cj.cache.
+// }
+
+func (cj *CookieCache) AddJarToCache(sessionID string, jar http.CookieJar) {
 	cj.Lock()
 	cj.cache.Add(sessionID, jar)
 	cj.Unlock()
+}
+
+func (cj *CookieCache) GetCachedCookieJar(sessionID string) (interface{}, bool) {
+	return cj.cache.Get(sessionID)
 }
 
 // RequestCallback defines how the caller of `ReadRequest` uses the request that was read.
