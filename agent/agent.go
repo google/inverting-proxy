@@ -42,7 +42,6 @@ import (
 	compute "google.golang.org/api/compute/v1"
 
 	"github.com/google/inverting-proxy/agent/utils"
-	//"./utils"
 	"github.com/google/inverting-proxy/agent/websockets"
 	"github.com/google/uuid"
 )
@@ -65,11 +64,12 @@ var (
 	healthCheckPath      = flag.String("health-check-path", "/", "Path on backend host to issue health checks against.  Defaults to the root.")
 	healthCheckFreq      = flag.Int("health-check-interval-seconds", 0, "Wait time in seconds between health checks.  Set to zero to disable health checks.  Checks disabled by default.")
 	healthCheckUnhealthy = flag.Int("health-check-unhealthy-threshold", 2, "A so-far healthy backend will be marked unhealthy after this many consecutive failures. The minimum value is 1.")
-	cookieLRU            *utils.CookieCache
+	cookieLRU, _         = utils.NewCookieCache(cookieCacheLimit)
 )
 
 func director(r *http.Request) {
-
+	// There should be a session ID assigned by now
+	//
 }
 
 func modifyResponse(res *http.Response) error {
@@ -128,7 +128,17 @@ func forwardRequest(client *http.Client, hostProxy http.Handler, request *utils.
 		// Assign a session ID
 		sessionID = uuid.New().String()
 		// Cache the cookie jar of the current session
-		cookieLRU.AddJarToCache(sessionID, &client.Jar)
+		cookieLRU.AddJarToCache(sessionID, client.Jar)
+	}
+	// Is it possible for the request to have a session ID but not be cached?
+	// Check cache for the value of the session ID cookie
+	// If not present, cache the session ID & cookie jar
+
+	sessionID = sessionCookie.Value
+	_, ok := cookieLRU.GetCachedCookieJar(sessionID)
+	// Session cookie exists but the cookie jar is not cached (possibly evicted earlier)
+	if !ok {
+		cookieLRU.AddJarToCache(sessionID, client.Jar)
 	}
 
 	responseForwarder, err := utils.NewResponseForwarder(client, *proxy, request.BackendID, request.RequestID, sessionID)
@@ -295,6 +305,6 @@ func main() {
 		log.Fatal(err.Error())
 	}
 
-	cookieLRU, err := utils.NewCookieCache(cookieCacheLimit)
+	//cookieLRU, _ = utils.NewCookieCache(cookieCacheLimit)
 
 }
