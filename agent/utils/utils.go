@@ -119,16 +119,14 @@ func NewCookieCache(cookieCacheLimit int) (*CookieCache, error) {
 	}, nil
 }
 
-// func (cj *CookieCache) Cookies(u *url.URL) (cookies []*http.Cookie) {
-// 	return cj.cache.
-// }
-
+// AddJarToCache takes a Jar from http.Client and stores it in a cache
 func (cj *CookieCache) AddJarToCache(sessionID string, jar http.CookieJar) {
 	cj.Lock()
 	cj.cache.Add(sessionID, jar)
 	cj.Unlock()
 }
 
+// GetCachedCookieJar returns the Jar mapped to the sessionID
 func (cj *CookieCache) GetCachedCookieJar(sessionID string) (interface{}, bool) {
 	return cj.cache.Get(sessionID)
 }
@@ -309,7 +307,7 @@ func ReadRequest(client *http.Client, proxyHost, backendID, requestID string, ca
 }
 
 // ResponseForwarder implements http.ResponseWriter by dumping a wire-compatible
-// representation of the response to 'proxyWriter' field.ResponseForwarder
+// representation of the response to 'proxyWriter' field.
 //
 // ResponseForwarder is used by the agent to forward a response from the backend
 // target to the inverting proxy.
@@ -353,7 +351,7 @@ type ResponseForwarder struct {
 
 // NewResponseForwarder constructs a new ResponseForwarder that forwards to the
 // given proxy for the specified request.
-func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID string, sessionID string) (*ResponseForwarder, error) {
+func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID, sessionID string) (*ResponseForwarder, error) {
 	// The contortions below support streaming.
 	//
 	// There are two pipes:
@@ -363,6 +361,8 @@ func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID s
 	//
 	// 2. responseBodyReader, responseBodyWriter: This pipe corresponds to the response body
 	//       from the backend target. To this pipe, we stream each read from backend target.
+
+	log.Println("creating new response forwarder")
 	proxyReader, proxyWriter := io.Pipe()
 	startedChan := make(chan struct{}, 1)
 	responseBodyReader, responseBodyWriter := io.Pipe()
@@ -423,10 +423,11 @@ func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID s
 			HttpOnly: true,
 			//need expiry to be controlled by flag
 		}
-
+		log.Printf("Added cookie to responseFowarder, %s", sessionCookie.String())
 		responseForwarder.response.Header.Add("Set-Cookie", sessionCookie.String())
 	}
 	return responseForwarder, nil
+
 }
 
 func (rf *ResponseForwarder) notify() {

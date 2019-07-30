@@ -48,8 +48,8 @@ import (
 
 const (
 	requestCacheLimit = 1000
-	cookieCacheLimit  = 10
 	emailScope        = "email"
+	cookieCacheLimit  = 10
 )
 
 var (
@@ -67,16 +67,8 @@ var (
 	cookieLRU, _         = utils.NewCookieCache(cookieCacheLimit)
 )
 
-func director(r *http.Request) {
-	// There should be a session ID assigned by now
-	//
-}
+func modifyResponse(res *http.Response) {
 
-func modifyResponse(res *http.Response) error {
-	// 	// Remove cookies from res.header and add to the cookie jar instead
-	// 	// how to access cookie jar in LRU
-	// 	// make sure to not remove the session cookie if that needs to be set
-	return nil
 }
 
 func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) (http.Handler, error) {
@@ -85,26 +77,38 @@ func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) 
 		Host:   host,
 	})
 
-	hostProxy.Director = director
-	hostProxy.ModifyResponse = modifyResponse
+	existingDirector := hostProxy.Director
 
-	// check if request has session cookie
-	// 		if it does, check the lru to get the cookie jar
-	//			if no entry in LRU, add the cookie jar from the request to the LRU
-	// 		if no session cookie
-	//			set a flag
-	// hostProxy.Director = func(req *http.Request) {
-	// 	sessionCookie, err := req.Cookie("session_id")
+	hostProxy.Director = func(r *http.Request) {
 
-	// 	if err != nil {
-	// 		// No session cookie, generate it
-	// 		sessionID := uuid.New()
-	// 		log.Printf("%s", sessionID)
-	// 	} else {
-	// 		log.Printf(sessionCookie.Name)
-	// 	}
+		existingDirector(r)
 
-	// }
+		sessionCookie, err := r.Cookie("session-id")
+		if err != nil {
+			// This should not happen
+			log.Printf("No session cookie in request, bad; error is %s", err)
+		} else {
+			if sessionCookie != nil {
+				log.Println("cookie exists")
+				sessionID := sessionCookie.Value
+				log.Printf("session id is %s", sessionID)
+				cachedCookieJar, ok := cookieLRU.GetCachedCookieJar(sessionID)
+				if !ok {
+					fmt.Printf("No cached cookie jar with session ID: %v", sessionID)
+				}
+
+				// Get only the applicable cookies
+				cookies := cachedCookieJar.(http.CookieJar).Cookies(r.URL)
+
+				// Add the cookies to the request header
+				for c := range cookies {
+					r.AddCookie(cookies[c])
+				}
+			}
+
+		}
+	}
+	//hostProxy.ModifyResponse = modifyResponse
 
 	hostProxy.FlushInterval = 100 * time.Millisecond
 	if shimPath == "" {
@@ -125,20 +129,21 @@ func forwardRequest(client *http.Client, hostProxy http.Handler, request *utils.
 	sessionCookie, err := httpRequest.Cookie("session-id")
 	// No session cookie found
 	if err != nil {
+		fmt.Println("No session cookie")
 		// Assign a session ID
-		sessionID = uuid.New().String()
+		sessionID := uuid.New().String()
+		fmt.Printf("Assigned session ID %s", sessionID)
 		// Cache the cookie jar of the current session
 		cookieLRU.AddJarToCache(sessionID, client.Jar)
-	}
-	// Is it possible for the request to have a session ID but not be cached?
-	// Check cache for the value of the session ID cookie
-	// If not present, cache the session ID & cookie jar
-
-	sessionID = sessionCookie.Value
-	_, ok := cookieLRU.GetCachedCookieJar(sessionID)
-	// Session cookie exists but the cookie jar is not cached (possibly evicted earlier)
-	if !ok {
-		cookieLRU.AddJarToCache(sessionID, client.Jar)
+	} else {
+		fmt.Println("Session ID exists")
+		sessionID = sessionCookie.Value
+		_, ok := cookieLRU.GetCachedCookieJar(sessionID)
+		// Session cookie exists but the cookie jar is not cached (possibly evicted earlier)
+		if !ok {
+			fmt.Println("Need to cache cookie jar")
+			cookieLRU.AddJarToCache(sessionID, client.Jar)
+		}
 	}
 
 	responseForwarder, err := utils.NewResponseForwarder(client, *proxy, request.BackendID, request.RequestID, sessionID)
@@ -304,7 +309,4 @@ func main() {
 	if err := runAdapter(); err != nil {
 		log.Fatal(err.Error())
 	}
-
-	//cookieLRU, _ = utils.NewCookieCache(cookieCacheLimit)
-
 }

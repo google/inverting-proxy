@@ -85,14 +85,6 @@ func RunLocalProxy(ctx context.Context) (int, error) {
 	return 0, fmt.Errorf("Locally-running proxy failed to start up in time: %q", proxyOut.String())
 }
 
-func setCookie(w http.ResponseWriter, r *http.Request) {
-	cookie := http.Cookie{
-		Name:  "test-cookie",
-		Value: "fake value",
-	}
-	http.SetCookie(w, &cookie)
-}
-
 func main() {
 	flag.Parse()
 
@@ -135,14 +127,15 @@ func main() {
 	}))
 
 	sessionCookie := &http.Cookie{
-		Name:  "session-id",
-		Value: uuid.New().String(),
+		Name:     "session-id",
+		Value:    uuid.New().String(),
+		Secure:   true,
+		HttpOnly: true,
 	}
 
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.SetCookie(w, sessionCookie)
-		log.Printf("Added cookie %s with value %s", sessionCookie.Name, sessionCookie.Value)
 		log.Printf("Responding to backend request to %q", r.URL.Path)
+		r.AddCookie(sessionCookie)
 
 		var templateBuf bytes.Buffer
 		templateVals := &struct {
@@ -176,28 +169,14 @@ func main() {
 	}
 	log.Printf("Started backend at localhost:%s and proxy at %s", backendURL.Port(), proxyURL)
 
-	resp := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	setCookie(resp, req)
-
-	log.Print("read cookie????")
-
-	if resp.Code != http.StatusTeapot {
-		log.Printf("Status code is %v", resp.Code)
-	}
-	if len(resp.Header().Get("test-cookie")) > 0 {
-		log.Print("Cookie set")
-		log.Printf("cookie : %v", resp.Header().Get("test-cookie"))
-	}
-
 	// This assumes that "Make build" has been run
 	args := strings.Join(append(
 		[]string{"${GOPATH}/bin/proxy-forwarding-agent"},
 		"--debug=true",
 		"--backend=testBackend",
 		"--proxy", proxyURL+"/",
-		"--host=localhost:"+backendURL.Port()),
-		" ")
+		"--host=localhost:"+backendURL.Port(),
+	), " ")
 	agentCmd := exec.CommandContext(ctx, "/bin/bash", "-c", args)
 	agentCmd.Stdout = os.Stdout
 	agentCmd.Stderr = os.Stderr
