@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httputil"
 	"net/url"
 	"strings"
@@ -38,6 +39,7 @@ import (
 
 	"github.com/golang/groupcache/lru"
 	"golang.org/x/net/context"
+	"golang.org/x/net/publicsuffix"
 	"golang.org/x/oauth2/google"
 	compute "google.golang.org/api/compute/v1"
 
@@ -64,12 +66,9 @@ var (
 	healthCheckPath      = flag.String("health-check-path", "/", "Path on backend host to issue health checks against.  Defaults to the root.")
 	healthCheckFreq      = flag.Int("health-check-interval-seconds", 0, "Wait time in seconds between health checks.  Set to zero to disable health checks.  Checks disabled by default.")
 	healthCheckUnhealthy = flag.Int("health-check-unhealthy-threshold", 2, "A so-far healthy backend will be marked unhealthy after this many consecutive failures. The minimum value is 1.")
+	sessionCookieTimeout = flag.Duration("session-cookie-timeout", 10*time.Minute, "Cookie timeout for the session cookie")
 	cookieLRU, _         = utils.NewCookieCache(cookieCacheLimit)
 )
-
-func modifyResponse(res *http.Response) {
-
-}
 
 func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) (http.Handler, error) {
 	hostProxy := httputil.NewSingleHostReverseProxy(&url.URL{
@@ -80,18 +79,22 @@ func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) 
 	existingDirector := hostProxy.Director
 
 	hostProxy.Director = func(r *http.Request) {
-
 		existingDirector(r)
 
 		sessionCookie, err := r.Cookie("session-id")
+		requestDump, err := httputil.DumpRequest(r, true)
 		if err != nil {
-			// This should not happen
-			log.Printf("No session cookie in request, bad; error is %s", err)
+			log.Println(err)
+		}
+		log.Println("request in director")
+		log.Println(string(requestDump))
+
+		if err != nil {
+			// This should not happen, should have a session cookie by this point
+			log.Fatal(err)
 		} else {
 			if sessionCookie != nil {
-				log.Println("cookie exists")
 				sessionID := sessionCookie.Value
-				log.Printf("session id is %s", sessionID)
 				cachedCookieJar, ok := cookieLRU.GetCachedCookieJar(sessionID)
 				if !ok {
 					fmt.Printf("No cached cookie jar with session ID: %v", sessionID)
@@ -108,7 +111,20 @@ func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) 
 
 		}
 	}
-	//hostProxy.ModifyResponse = modifyResponse
+
+	hostProxy.ModifyResponse = func(res *http.Response) error {
+
+		res.Header.Add("Set-Cookie", "test")
+
+		responseDump, err := httputil.DumpResponse(res, true)
+		if err != nil {
+			log.Println(err)
+		}
+		log.Println("response in modify")
+		log.Println(string(responseDump))
+
+		return nil
+	}
 
 	hostProxy.FlushInterval = 100 * time.Millisecond
 	if shimPath == "" {
@@ -126,27 +142,54 @@ func forwardRequest(client *http.Client, hostProxy http.Handler, request *utils.
 	}
 
 	var sessionID string
+	var setCookie bool
 	sessionCookie, err := httpRequest.Cookie("session-id")
 	// No session cookie found
 	if err != nil {
-		fmt.Println("No session cookie")
+		log.Println("No session cookie")
 		// Assign a session ID
 		sessionID := uuid.New().String()
-		fmt.Printf("Assigned session ID %s", sessionID)
+		log.Printf("Assigned session ID %s", sessionID)
+
+		options := cookiejar.Options{
+			PublicSuffixList: publicsuffix.List,
+		}
+		client.Jar, err = cookiejar.New(&options)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		// Add cookie to the request
+		sessionCookie := http.Cookie{
+			Name:     "session-id",
+			Value:    sessionID,
+			Secure:   true,
+			HttpOnly: true,
+			//need expiry to be controlled by flag
+		}
+		httpRequest.AddCookie(&sessionCookie)
 		// Cache the cookie jar of the current session
 		cookieLRU.AddJarToCache(sessionID, client.Jar)
+		setCookie = true
+
 	} else {
-		fmt.Println("Session ID exists")
+		log.Println("Session ID exists")
 		sessionID = sessionCookie.Value
 		_, ok := cookieLRU.GetCachedCookieJar(sessionID)
 		// Session cookie exists but the cookie jar is not cached (possibly evicted earlier)
 		if !ok {
-			fmt.Println("Need to cache cookie jar")
+			fmt.Println("Caching jar from client")
 			cookieLRU.AddJarToCache(sessionID, client.Jar)
 		}
+		setCookie = false
 	}
 
-	responseForwarder, err := utils.NewResponseForwarder(client, *proxy, request.BackendID, request.RequestID, sessionID)
+	responseForwarder, err := utils.NewResponseForwarder(client, *proxy, request.BackendID, request.RequestID)
+	if setCookie {
+		log.Println("Need to set cookie in response")
+		responseForwarder.SetCookie(sessionCookie.String())
+		log.Println("Cookie should be set in response header")
+	}
 	if err != nil {
 		return fmt.Errorf("failed to create the response forwarder: %v", err)
 	}
