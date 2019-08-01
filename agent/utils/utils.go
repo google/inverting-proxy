@@ -351,7 +351,7 @@ type ResponseForwarder struct {
 
 // NewResponseForwarder constructs a new ResponseForwarder that forwards to the
 // given proxy for the specified request.
-func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID, sessionID string) (*ResponseForwarder, error) {
+func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID string) (*ResponseForwarder, error) {
 	// The contortions below support streaming.
 	//
 	// There are two pipes:
@@ -361,8 +361,6 @@ func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID, 
 	//
 	// 2. responseBodyReader, responseBodyWriter: This pipe corresponds to the response body
 	//       from the backend target. To this pipe, we stream each read from backend target.
-
-	log.Println("creating new response forwarder")
 	proxyReader, proxyWriter := io.Pipe()
 	startedChan := make(chan struct{}, 1)
 	responseBodyReader, responseBodyWriter := io.Pipe()
@@ -397,7 +395,7 @@ func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID, 
 		close(proxyClientErrChan)
 	}()
 
-	responseForwarder := &ResponseForwarder{
+	return &ResponseForwarder{
 		response: &http.Response{
 			Proto:      "HTTP/1.1",
 			ProtoMajor: 1,
@@ -413,21 +411,14 @@ func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID, 
 		proxyClientErrors:  proxyClientErrChan,
 		forwardingErrors:   forwardingErrChan,
 		writeErrors:        writeErrChan,
-	}
+	}, nil
+}
 
-	if sessionID != "" {
-		sessionCookie := http.Cookie{
-			Name:     "session-id",
-			Value:    sessionID,
-			Secure:   true,
-			HttpOnly: true,
-			//need expiry to be controlled by flag
-		}
-		log.Printf("Added cookie to responseFowarder, %s", sessionCookie.String())
-		responseForwarder.response.Header.Add("Set-Cookie", sessionCookie.String())
-	}
-	return responseForwarder, nil
-
+// SetCookie sets the session cookie within the response header if necessary
+func (rf *ResponseForwarder) SetCookie(cookie string) {
+	log.Println("set the cookie")
+	rf.response.Header.Add("Set-Cookie", cookie)
+	log.Printf("header better have the cookei")
 }
 
 func (rf *ResponseForwarder) notify() {
