@@ -209,6 +209,12 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	id := p.newID()
 	log.Printf("Received new frontend request %q", id)
+	// Filter out hop-by-hop headers from the request
+	for name := range r.Header {
+		if isHopByHopHeader(name) {
+			r.Header.Del(name)
+		}
+	}
 	pending := newPendingRequest(r)
 	p.Lock()
 	p.requests[id] = pending
@@ -233,9 +239,9 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case resp := <-pending.respChan:
 		defer resp.Body.Close()
 		// Copy all of the non-hop-by-hop headers to the proxied response
-		for key, vals := range resp.Header {
-			if !isHopByHopHeader(key) {
-				w.Header()[key] = vals
+		for name, vals := range resp.Header {
+			if !isHopByHopHeader(name) {
+				w.Header()[name] = vals
 			}
 		}
 		w.WriteHeader(resp.StatusCode)
