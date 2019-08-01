@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"context"
+
 	"github.com/google/inverting-proxy/agent/utils"
 )
 
@@ -217,6 +218,9 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case resp := <-pending.respChan:
 		defer resp.Body.Close()
+		for key, vals := range resp.Header {
+			w.Header()[key] = vals
+		}
 		w.WriteHeader(resp.StatusCode)
 		io.Copy(w, resp.Body)
 		return
