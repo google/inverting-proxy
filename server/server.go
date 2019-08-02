@@ -194,7 +194,7 @@ func (p *proxy) newID() string {
 //
 // See: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers#hbh
 func isHopByHopHeader(name string) bool {
-	switch n := strings.ToLower(name); n {
+	switch strings.ToLower(name) {
 	case "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade":
 		return true
 	default:
