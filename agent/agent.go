@@ -28,6 +28,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -40,7 +41,6 @@ import (
 	"text/template"
 	"time"
 
-	"context"
 	"github.com/golang/groupcache/lru"
 	"golang.org/x/oauth2/google"
 	compute "google.golang.org/api/compute/v1"
@@ -71,7 +71,7 @@ var (
 	backendID            = flag.String("backend", "", "Unique ID for this backend.")
 	debug                = flag.Bool("debug", false, "Whether or not to print debug log messages")
 	forwardUserID        = flag.Bool("forward-user-id", false, "Whether or not to include the ID (email address) of the end user in requests to the backend")
-	injectBanner         = flag.String("inject-banner", "", "HTML snippet to inject in served webpages Whether or not to replace websockets with a shim")
+	injectBanner         = flag.String("inject-banner", "", "HTML snippet to inject in served webpages")
 	shimWebsockets       = flag.Bool("shim-websockets", false, "Whether or not to replace websockets with a shim")
 	shimPath             = flag.String("shim-path", "", "Path under which to handle websocket shim requests")
 	healthCheckPath      = flag.String("health-check-path", "/", "Path on backend host to issue health checks against.  Defaults to the root.")
