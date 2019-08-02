@@ -28,11 +28,10 @@ import (
 )
 
 const (
-	acceptHeader          = "Accept"
-	contentEncodingHeader = "Content-Encoding"
-	contentTypeHeader     = "Content-Type"
-	refererHeader         = "Referer"
-	frameWrapperTemplate  = `<html>
+	acceptHeader         = "Accept"
+	contentTypeHeader    = "Content-Type"
+	refererHeader        = "Referer"
+	frameWrapperTemplate = `<html>
   <body style="margin:0px">
     {{.Banner}}
     <iframe height="100%" width="100%" style="border:0px" src="{{.TargetURL}}"></iframe>
