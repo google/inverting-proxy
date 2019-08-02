@@ -47,7 +47,7 @@ func isHTMLRequest(r *http.Request) bool {
 		return false
 	}
 	accept := r.Header.Get(acceptHeader)
-	return strings.Contains(accept, "text/html")
+	return strings.Contains(accept, "html")
 }
 
 func isHTMLResponse(resp *http.Response) bool {

@@ -2,6 +2,7 @@ build:	test
 	go build ./app
 
 test:	buildrunlocal
+	go test ./agent/banner/...
 	go test ./agent/utils/...
 	go test -count 1 ./agent/agent_test.go
 
