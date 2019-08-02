@@ -54,10 +54,8 @@ func isHTMLResponse(resp *http.Response) bool {
 	if resp.StatusCode != http.StatusOK {
 		return false
 	}
-	if !strings.Contains(resp.Header.Get(contentTypeHeader), "html") {
-		return false
-	}
-	return true
+	contentType := resp.Header.Get(contentTypeHeader)
+	return strings.Contains(contentType, "html")
 }
 
 func isAlreadyFramed(r *http.Request) bool {
