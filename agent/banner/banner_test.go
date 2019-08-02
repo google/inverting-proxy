@@ -18,6 +18,7 @@ package banner
 
 import (
 	"net/http"
+	"net/url"
 	"testing"
 )
 
@@ -125,6 +126,48 @@ func TestIsHTMLResponse(t *testing.T) {
 	for _, testCase := range testCases {
 		if got, want := isHTMLResponse(testCase.resp), testCase.want; got != want {
 			t.Errorf("isHTMLResponse(%+v): got %v, want %v", testCase.resp, got, want)
+		}
+	}
+}
+
+func TestIsAlreadyFramed(t *testing.T) {
+	testCases := []struct {
+		req  *http.Request
+		want bool
+	}{
+		{
+			req:  &http.Request{},
+			want: false,
+		},
+		{
+			req: &http.Request{
+				Host: "example.com",
+				URL: &url.URL{
+					Path: "/some/example/path",
+				},
+				Header: http.Header{
+					"Referer": []string{"https://example.com/some/other/path"},
+				},
+			},
+			want: false,
+		},
+		{
+			req: &http.Request{
+				Host: "example.com",
+				URL: &url.URL{
+					Path: "/some/example/path",
+				},
+				Header: http.Header{
+					"Referer": []string{"https://example.com/some/example/path"},
+				},
+			},
+			want: true,
+		},
+	}
+
+	for _, testCase := range testCases {
+		if got, want := isAlreadyFramed(testCase.req), testCase.want; got != want {
+			t.Errorf("isAlreadyFramed(%+v): got %v, want %v", testCase.req, got, want)
 		}
 	}
 }
