@@ -70,6 +70,12 @@ var (
 	cookieLRU, _         = utils.NewCookieCache(cookieCacheLimit)
 )
 
+func remove(slice []*http.Cookie, i int) ([]*http.Cookie, *http.Cookie) {
+	sessionCookie := slice[i]
+	copy(slice[i:], slice[i+1:])
+	return slice[:len(slice)-1], sessionCookie
+}
+
 func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) (http.Handler, error) {
 	hostProxy := httputil.NewSingleHostReverseProxy(&url.URL{
 		Scheme: "http",
@@ -82,12 +88,11 @@ func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) 
 		existingDirector(r)
 
 		sessionCookie, err := r.Cookie("session-id")
-		requestDump, err := httputil.DumpRequest(r, true)
-		if err != nil {
-			log.Println(err)
-		}
-		log.Println("request in director")
-		log.Println(string(requestDump))
+		// requestDump, err := httputil.DumpRequest(r, true)
+		// if err != nil {
+		// 	log.Println(err)
+		// }
+		// log.Println("request in director: ", string(requestDump))
 
 		if err != nil {
 			// This should not happen, should have a session cookie by this point
@@ -102,7 +107,6 @@ func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) 
 
 				// Get only the applicable cookies
 				cookies := cachedCookieJar.(http.CookieJar).Cookies(r.URL)
-
 				// Add the cookies to the request header
 				for c := range cookies {
 					r.AddCookie(cookies[c])
@@ -114,14 +118,31 @@ func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) 
 
 	hostProxy.ModifyResponse = func(res *http.Response) error {
 
-		res.Header.Add("Set-Cookie", "test")
+		//log.Println("header in modifyresponse ", res.Header)
+		// responseDump, err := httputil.DumpResponse(res, true)
+		// if err != nil {
+		// 	log.Println(err)
+		// }
+		// log.Println("response in modify: ", string(responseDump))
 
-		responseDump, err := httputil.DumpResponse(res, true)
-		if err != nil {
-			log.Println(err)
+		// need to get session cookie first to get the session id
+		// session id -> cookie jar
+		// update the cookie jar w/ possibly other cookies that are set in the header
+		//var sessionCookie *http.Cookie
+		cookies := res.Cookies()
+		for c := range cookies {
+			if cookies[c].Name == "session-id" {
+				cookies, sessionCookie := remove(cookies, c)
+			}
 		}
-		log.Println("response in modify")
-		log.Println(string(responseDump))
+
+		// sessionID := sessionCookie.Value
+
+		//cookieJar, _ := cookieLRU.GetCachedCookieJar(sessionID)
+
+		// Need URL to be able to set cookies in the CookieJar, possibly store the URL in the session cookie
+		// and then parse to retrieve the URL struct.
+		//cookieJar.SetCookies(cookies, URL)
 
 		return nil
 	}
@@ -160,14 +181,17 @@ func forwardRequest(client *http.Client, hostProxy http.Handler, request *utils.
 		}
 
 		// Add cookie to the request
-		sessionCookie := http.Cookie{
-			Name:     "session-id",
-			Value:    sessionID,
-			Secure:   true,
-			HttpOnly: true,
-			//need expiry to be controlled by flag
+		sessionCookie = &http.Cookie{
+			Name:  "session-id",
+			Value: sessionID,
+			Path:  httpRequest.URL.String(),
+			//Secure:   true,
+			//HttpOnly: true,
+			//need expiry-controlled flag
 		}
-		httpRequest.AddCookie(&sessionCookie)
+		httpRequest.AddCookie(sessionCookie)
+		client.Jar.SetCookies(httpRequest.URL, []*http.Cookie{sessionCookie})
+
 		// Cache the cookie jar of the current session
 		cookieLRU.AddJarToCache(sessionID, client.Jar)
 		setCookie = true
@@ -178,18 +202,18 @@ func forwardRequest(client *http.Client, hostProxy http.Handler, request *utils.
 		_, ok := cookieLRU.GetCachedCookieJar(sessionID)
 		// Session cookie exists but the cookie jar is not cached (possibly evicted earlier)
 		if !ok {
-			fmt.Println("Caching jar from client")
+			log.Println("Caching jar from client")
 			cookieLRU.AddJarToCache(sessionID, client.Jar)
 		}
 		setCookie = false
 	}
 
-	responseForwarder, err := utils.NewResponseForwarder(client, *proxy, request.BackendID, request.RequestID)
-	if setCookie {
-		log.Println("Need to set cookie in response")
-		responseForwarder.SetCookie(sessionCookie.String())
-		log.Println("Cookie should be set in response header")
+	if !setCookie {
+		sessionCookie = nil
 	}
+
+	responseForwarder, err := utils.NewResponseForwarder(client, *proxy, request.BackendID, request.RequestID, sessionCookie)
+
 	if err != nil {
 		return fmt.Errorf("failed to create the response forwarder: %v", err)
 	}
