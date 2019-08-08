@@ -109,7 +109,7 @@ type ForwardedRequest struct {
 // CookieCache represents a LRU cache to store session ID -> CookieJar
 type CookieCache struct {
 	cache *lru.Cache
-	sync.Mutex
+	mu    sync.Mutex
 }
 
 // NewCookieCache initializes an LRU cache with cookieCacheLimit entries
@@ -121,9 +121,9 @@ func NewCookieCache(cookieCacheLimit int) (*CookieCache, error) {
 
 // AddJarToCache takes a Jar from http.Client and stores it in a cache
 func (cj *CookieCache) AddJarToCache(sessionID string, jar http.CookieJar) {
-	cj.Lock()
+	cj.mu.Lock()
 	cj.cache.Add(sessionID, jar)
-	cj.Unlock()
+	cj.mu.Unlock()
 }
 
 // GetCachedCookieJar returns the Jar mapped to the sessionID
@@ -351,7 +351,7 @@ type ResponseForwarder struct {
 
 // NewResponseForwarder constructs a new ResponseForwarder that forwards to the
 // given proxy for the specified request.
-func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID string) (*ResponseForwarder, error) {
+func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID string, sessionCookie *http.Cookie) (*ResponseForwarder, error) {
 	// The contortions below support streaming.
 	//
 	// There are two pipes:
@@ -374,6 +374,12 @@ func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID s
 	proxyReq.Header.Set(HeaderRequestID, requestID)
 	proxyReq.Header.Set("Content-Type", "text/plain")
 
+	responseHeader := make(http.Header)
+	log.Println("Session cookie is ", sessionCookie.String())
+	if sessionCookie != nil {
+		responseHeader.Add("Set-Cookie", sessionCookie.String())
+	}
+
 	proxyClientErrChan := make(chan error, 100)
 	forwardingErrChan := make(chan error, 100)
 	writeErrChan := make(chan error, 100)
@@ -395,12 +401,12 @@ func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID s
 		close(proxyClientErrChan)
 	}()
 
-	return &ResponseForwarder{
+	responseForwarder := &ResponseForwarder{
 		response: &http.Response{
 			Proto:      "HTTP/1.1",
 			ProtoMajor: 1,
 			ProtoMinor: 1,
-			Header:     make(http.Header),
+			Header:     responseHeader,
 			Body:       responseBodyReader,
 		},
 		wroteHeader:        false,
@@ -411,14 +417,8 @@ func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID s
 		proxyClientErrors:  proxyClientErrChan,
 		forwardingErrors:   forwardingErrChan,
 		writeErrors:        writeErrChan,
-	}, nil
-}
-
-// SetCookie sets the session cookie within the response header if necessary
-func (rf *ResponseForwarder) SetCookie(cookie string) {
-	log.Println("set the cookie")
-	rf.response.Header.Add("Set-Cookie", cookie)
-	log.Printf("header better have the cookei")
+	}
+	return responseForwarder, nil
 }
 
 func (rf *ResponseForwarder) notify() {
