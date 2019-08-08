@@ -23,6 +23,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"flag"
@@ -32,10 +33,9 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
-
-	"context"
 
 	"github.com/google/inverting-proxy/agent/utils"
 )
@@ -188,6 +188,20 @@ func (p *proxy) newID() string {
 	return fmt.Sprintf("%x", sum)
 }
 
+// isHopByHopHeader determines whether or not the given header name represents
+// a header that is specific to a single network hop and thus should not be
+// retransmitted by a proxy.
+//
+// See: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers#hbh
+func isHopByHopHeader(name string) bool {
+	switch strings.ToLower(name) {
+	case "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade":
+		return true
+	default:
+		return false
+	}
+}
+
 func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if backendID := r.Header.Get(utils.HeaderBackendID); backendID != "" {
 		p.handleAgentRequest(w, r, backendID)
@@ -195,6 +209,12 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	id := p.newID()
 	log.Printf("Received new frontend request %q", id)
+	// Filter out hop-by-hop headers from the request
+	for name := range r.Header {
+		if isHopByHopHeader(name) {
+			r.Header.Del(name)
+		}
+	}
 	pending := newPendingRequest(r)
 	p.Lock()
 	p.requests[id] = pending
@@ -218,8 +238,11 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case resp := <-pending.respChan:
 		defer resp.Body.Close()
-		for key, vals := range resp.Header {
-			w.Header()[key] = vals
+		// Copy all of the non-hop-by-hop headers to the proxied response
+		for name, vals := range resp.Header {
+			if !isHopByHopHeader(name) {
+				w.Header()[name] = vals
+			}
 		}
 		w.WriteHeader(resp.StatusCode)
 		io.Copy(w, resp.Body)

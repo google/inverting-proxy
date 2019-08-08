@@ -14,12 +14,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Command websockets launches a reverse proxy that can be used to
-// manually test changes to the code in the agent/websockets package
+// Command runlocal launches a reverse proxy that can be used to
+// locally test changes to the code in the agent or server packages
 //
 // Example usage:
-//   go build -o ~/bin/test-websocket-sever testing/websockets.go
-//   ~/bin/test-websocket-server --port 8081 --backend http://localhost:8082
+//   go build -o ~/bin/inverting-proxy-run-local testing/runlocal/main.go
+//   ~/bin/inverting-proxy-run-local --port 8081
 package main
 
 import (
@@ -175,8 +175,8 @@ func main() {
 		"--debug=true",
 		"--backend=testBackend",
 		"--proxy", proxyURL+"/",
-		"--host=localhost:"+backendURL.Port(),
-	), " ")
+		"--host=localhost:"+backendURL.Port()),
+		" ")
 	agentCmd := exec.CommandContext(ctx, "/bin/bash", "-c", args)
 	agentCmd.Stdout = os.Stdout
 	agentCmd.Stderr = os.Stderr

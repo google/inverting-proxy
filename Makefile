@@ -1,9 +1,12 @@
 build:	test
 	go build ./app
 
-test:	buildagent buildserver
+test:	buildrunlocal
 	go test ./agent/utils/...
 	go test -count 1 ./agent/agent_test.go
+
+buildrunlocal: buildagent buildserver
+	go build -o ${GOPATH}/bin/inverting-proxy-run-local ./testing/runlocal/main.go
 
 buildagent: vet
 	go build -o ${GOPATH}/bin/proxy-forwarding-agent ./agent/agent.go
