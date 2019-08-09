@@ -66,15 +66,9 @@ var (
 	healthCheckPath      = flag.String("health-check-path", "/", "Path on backend host to issue health checks against.  Defaults to the root.")
 	healthCheckFreq      = flag.Int("health-check-interval-seconds", 0, "Wait time in seconds between health checks.  Set to zero to disable health checks.  Checks disabled by default.")
 	healthCheckUnhealthy = flag.Int("health-check-unhealthy-threshold", 2, "A so-far healthy backend will be marked unhealthy after this many consecutive failures. The minimum value is 1.")
-	sessionCookieTimeout = flag.Duration("session-cookie-timeout", 10*time.Minute, "Cookie timeout for the session cookie")
+	sessionCookieTimeout = flag.Duration("session-cookie-timeout", 10*time.Minute, "Expiration flag for the session cookie")
 	cookieLRU, _         = utils.NewCookieCache(cookieCacheLimit)
 )
-
-func remove(slice []*http.Cookie, i int) ([]*http.Cookie, *http.Cookie) {
-	sessionCookie := slice[i]
-	copy(slice[i:], slice[i+1:])
-	return slice[:len(slice)-1], sessionCookie
-}
 
 func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) (http.Handler, error) {
 	hostProxy := httputil.NewSingleHostReverseProxy(&url.URL{
@@ -88,11 +82,6 @@ func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) 
 		existingDirector(r)
 
 		sessionCookie, err := r.Cookie("session-id")
-		// requestDump, err := httputil.DumpRequest(r, true)
-		// if err != nil {
-		// 	log.Println(err)
-		// }
-		// log.Println("request in director: ", string(requestDump))
 
 		if err != nil {
 			// This should not happen, should have a session cookie by this point
@@ -101,12 +90,11 @@ func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) 
 			if sessionCookie != nil {
 				sessionID := sessionCookie.Value
 				cachedCookieJar, ok := cookieLRU.GetCachedCookieJar(sessionID)
-				if !ok {
-					fmt.Printf("No cached cookie jar with session ID: %v", sessionID)
+				if !ok || cachedCookieJar == nil {
+					log.Fatal("No cached cookie jar")
 				}
 
-				// Get only the applicable cookies
-				cookies := cachedCookieJar.(http.CookieJar).Cookies(r.URL)
+				cookies := cachedCookieJar.Cookies(r.URL)
 				// Add the cookies to the request header
 				for c := range cookies {
 					r.AddCookie(cookies[c])
@@ -117,32 +105,21 @@ func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) 
 	}
 
 	hostProxy.ModifyResponse = func(res *http.Response) error {
-
-		//log.Println("header in modifyresponse ", res.Header)
-		// responseDump, err := httputil.DumpResponse(res, true)
-		// if err != nil {
-		// 	log.Println(err)
-		// }
-		// log.Println("response in modify: ", string(responseDump))
-
-		// need to get session cookie first to get the session id
-		// session id -> cookie jar
-		// update the cookie jar w/ possibly other cookies that are set in the header
-		//var sessionCookie *http.Cookie
-		cookies := res.Cookies()
-		for c := range cookies {
-			if cookies[c].Name == "session-id" {
-				cookies, sessionCookie := remove(cookies, c)
-			}
+		sessionCookie, err := res.Request.Cookie("session-id")
+		if err != nil {
+			log.Fatal(err)
 		}
 
-		// sessionID := sessionCookie.Value
+		cookieJar, ok := cookieLRU.GetCachedCookieJar(sessionCookie.Value)
+		if !ok || cookieJar == nil {
+			log.Fatal("No cached cookie jar")
+		}
 
-		//cookieJar, _ := cookieLRU.GetCachedCookieJar(sessionID)
-
-		// Need URL to be able to set cookies in the CookieJar, possibly store the URL in the session cookie
-		// and then parse to retrieve the URL struct.
-		//cookieJar.SetCookies(cookies, URL)
+		// Add any cookies in the responses' header to the cookie jar
+		cookiesToAdd := res.Cookies()
+		cookieJar.SetCookies(res.Request.URL, cookiesToAdd)
+		// Remove Set-Cookie headers from the response
+		res.Header.Del("Set-Cookie")
 
 		return nil
 	}
@@ -182,12 +159,12 @@ func forwardRequest(client *http.Client, hostProxy http.Handler, request *utils.
 
 		// Add cookie to the request
 		sessionCookie = &http.Cookie{
-			Name:  "session-id",
-			Value: sessionID,
-			Path:  httpRequest.URL.String(),
-			//Secure:   true,
-			//HttpOnly: true,
-			//need expiry-controlled flag
+			Name:     "session-id",
+			Value:    sessionID,
+			Path:     httpRequest.URL.String(),
+			Secure:   true,
+			HttpOnly: true,
+			Expires:  time.Now().Add(*sessionCookieTimeout),
 		}
 		httpRequest.AddCookie(sessionCookie)
 		client.Jar.SetCookies(httpRequest.URL, []*http.Cookie{sessionCookie})

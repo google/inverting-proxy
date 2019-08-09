@@ -126,9 +126,14 @@ func (cj *CookieCache) AddJarToCache(sessionID string, jar http.CookieJar) {
 	cj.mu.Unlock()
 }
 
-// GetCachedCookieJar returns the Jar mapped to the sessionID
-func (cj *CookieCache) GetCachedCookieJar(sessionID string) (interface{}, bool) {
-	return cj.cache.Get(sessionID)
+// GetCachedCookieJar returns the CookieJar mapped to the sessionID
+func (cj *CookieCache) GetCachedCookieJar(sessionID string) (http.CookieJar, bool) {
+	val, ok := cj.cache.Get(sessionID)
+	if !ok {
+		return nil, ok
+	}
+	jar, ok := val.(http.CookieJar)
+	return jar, ok
 }
 
 // RequestCallback defines how the caller of `ReadRequest` uses the request that was read.
