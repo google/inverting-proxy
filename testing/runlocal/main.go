@@ -173,6 +173,7 @@ func main() {
 	args := strings.Join(append(
 		[]string{"${GOPATH}/bin/proxy-forwarding-agent"},
 		"--debug=true",
+		"--session-cookie-name=SessionID",
 		"--backend=testBackend",
 		"--proxy", proxyURL+"/",
 		"--host=localhost:"+backendURL.Port(),
