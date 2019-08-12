@@ -28,11 +28,13 @@ import (
 	"math"
 	"math/rand"
 	"net/http"
+	"net/http/cookiejar"
 	"sync"
 	"time"
 
 	"cloud.google.com/go/compute/metadata"
 	"github.com/golang/groupcache/lru"
+	"golang.org/x/net/publicsuffix"
 )
 
 const (
@@ -127,13 +129,22 @@ func (cj *CookieCache) AddJarToCache(sessionID string, jar http.CookieJar) {
 }
 
 // GetCachedCookieJar returns the CookieJar mapped to the sessionID
-func (cj *CookieCache) GetCachedCookieJar(sessionID string) (http.CookieJar, bool) {
+func (cj *CookieCache) GetCachedCookieJar(sessionID string) (jar http.CookieJar, err error) {
 	val, ok := cj.cache.Get(sessionID)
 	if !ok {
-		return nil, ok
+		options := cookiejar.Options{
+			PublicSuffixList: publicsuffix.List,
+		}
+		jar, err = cookiejar.New(&options)
+		cj.AddJarToCache(sessionID, jar)
+		return jar, err
 	}
-	jar, ok := val.(http.CookieJar)
-	return jar, ok
+
+	jar, ok = val.(http.CookieJar)
+	if !ok {
+		return nil, fmt.Errorf("Internal error; unexpected type for value (%+v) stored in the cookie jar cache", val)
+	}
+	return jar, nil
 }
 
 // RequestCallback defines how the caller of `ReadRequest` uses the request that was read.

@@ -31,7 +31,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"net/http/cookiejar"
 	"net/http/httputil"
 	"net/url"
 	"strings"
@@ -39,7 +38,6 @@ import (
 
 	"github.com/golang/groupcache/lru"
 	"golang.org/x/net/context"
-	"golang.org/x/net/publicsuffix"
 	"golang.org/x/oauth2/google"
 	compute "google.golang.org/api/compute/v1"
 
@@ -92,8 +90,8 @@ func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) 
 			} else {
 				if sessionCookie != nil {
 					sessionID := sessionCookie.Value
-					cachedCookieJar, ok := cookieLRU.GetCachedCookieJar(sessionID)
-					if !ok || cachedCookieJar == nil {
+					cachedCookieJar, err := cookieLRU.GetCachedCookieJar(sessionID)
+					if err != nil {
 						log.Fatal("No cached cookie jar")
 					}
 
@@ -113,8 +111,8 @@ func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) 
 				log.Fatal(err)
 			}
 
-			cookieJar, ok := cookieLRU.GetCachedCookieJar(sessionCookie.Value)
-			if !ok || cookieJar == nil {
+			cookieJar, err := cookieLRU.GetCachedCookieJar(sessionCookie.Value)
+			if err != nil {
 				log.Fatal("No cached cookie jar")
 			}
 
@@ -147,54 +145,23 @@ func forwardRequest(client *http.Client, hostProxy http.Handler, request *utils.
 	var err error
 
 	if *sessionCookieName != "" {
-		var sessionID string
-		var setCookie bool
-		sessionCookie, err = httpRequest.Cookie(*sessionCookieName)
-		// No session cookie found
-		if err != nil {
+		if _, err = httpRequest.Cookie(*sessionCookieName); err == http.ErrNoCookie {
+			// No session cookie found
 			log.Println("No session cookie")
 			// Assign a session ID
 			sessionID := uuid.New().String()
 			log.Printf("Assigned session ID %s", sessionID)
 
-			options := cookiejar.Options{
-				PublicSuffixList: publicsuffix.List,
-			}
-			client.Jar, err = cookiejar.New(&options)
-			if err != nil {
-				log.Fatal(err)
-			}
-
 			// Add cookie to the request
 			sessionCookie = &http.Cookie{
-				Name:     *sessionCookieName,
-				Value:    sessionID,
-				Path:     httpRequest.URL.String(),
-				Secure:   true,
+				Name:  *sessionCookieName,
+				Value: sessionID,
+				Path:  httpRequest.URL.String(),
+				//Secure:   true,
 				HttpOnly: true,
 				Expires:  time.Now().Add(*sessionCookieTimeout),
 			}
 			httpRequest.AddCookie(sessionCookie)
-			client.Jar.SetCookies(httpRequest.URL, []*http.Cookie{sessionCookie})
-
-			// Cache the cookie jar of the current session
-			cookieLRU.AddJarToCache(sessionID, client.Jar)
-			setCookie = true
-
-		} else {
-			log.Println("Session ID exists")
-			sessionID = sessionCookie.Value
-			_, ok := cookieLRU.GetCachedCookieJar(sessionID)
-			// Session cookie exists but the cookie jar is not cached (possibly evicted earlier)
-			if !ok {
-				log.Println("Caching jar from client")
-				cookieLRU.AddJarToCache(sessionID, client.Jar)
-			}
-			setCookie = false
-		}
-
-		if !setCookie {
-			sessionCookie = nil
 		}
 	}
 
