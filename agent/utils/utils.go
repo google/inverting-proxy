@@ -390,12 +390,6 @@ func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID s
 	proxyReq.Header.Set(HeaderRequestID, requestID)
 	proxyReq.Header.Set("Content-Type", "text/plain")
 
-	responseHeader := make(http.Header)
-	log.Println("Session cookie is ", sessionCookie.String())
-	if sessionCookie != nil {
-		responseHeader.Add("Set-Cookie", sessionCookie.String())
-	}
-
 	proxyClientErrChan := make(chan error, 100)
 	forwardingErrChan := make(chan error, 100)
 	writeErrChan := make(chan error, 100)
@@ -417,6 +411,10 @@ func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID s
 		close(proxyClientErrChan)
 	}()
 
+	responseHeader := make(http.Header)
+	if sessionCookie != nil {
+		responseHeader.Add("Set-Cookie", sessionCookie.String())
+	}
 	responseForwarder := &ResponseForwarder{
 		response: &http.Response{
 			Proto:      "HTTP/1.1",
