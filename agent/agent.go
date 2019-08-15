@@ -57,6 +57,7 @@ var (
 	host                 = flag.String("host", "localhost:8080", "Hostname (including port) of the backend server")
 	backendID            = flag.String("backend", "", "Unique ID for this backend.")
 	debug                = flag.Bool("debug", false, "Whether or not to print debug log messages")
+	disableSSLForTest    = flag.Bool("disable-ssl-for-test", false, "Disable requirements for SSL when running tests locally")
 	forwardUserID        = flag.Bool("forward-user-id", false, "Whether or not to include the ID (email address) of the end user in requests to the backend")
 	shimWebsockets       = flag.Bool("shim-websockets", false, "Whether or not to replace websockets with a shim")
 	shimPath             = flag.String("shim-path", "", "Path under which to handle websocket shim requests")
@@ -143,22 +144,18 @@ func forwardRequest(client *http.Client, hostProxy http.Handler, request *utils.
 	}
 
 	var sessionCookie *http.Cookie
-	var err error
-
 	if *sessionCookieName != "" {
-		if _, err = httpRequest.Cookie(*sessionCookieName); err == http.ErrNoCookie {
-			// No session cookie found
-			log.Println("No session cookie")
+		if _, err := httpRequest.Cookie(*sessionCookieName); err == http.ErrNoCookie {
 			// Assign a session ID
 			sessionID := uuid.New().String()
-			log.Printf("Assigned session ID %s", sessionID)
+			log.Printf("Assigned a new session ID: %q", sessionID)
 
 			// Add cookie to the request
 			sessionCookie = &http.Cookie{
-				Name:  *sessionCookieName,
-				Value: sessionID,
-				Path:  httpRequest.URL.String(),
-				//Secure:   true,
+				Name:     *sessionCookieName,
+				Value:    sessionID,
+				Path:     httpRequest.URL.String(),
+				Secure:   !*disableSSLForTest,
 				HttpOnly: true,
 				Expires:  time.Now().Add(*sessionCookieTimeout),
 			}
