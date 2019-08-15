@@ -49,7 +49,6 @@ import (
 const (
 	requestCacheLimit = 1000
 	emailScope        = "email"
-	cookieCacheLimit  = 10
 )
 
 var (
@@ -65,9 +64,11 @@ var (
 	healthCheckFreq      = flag.Int("health-check-interval-seconds", 0, "Wait time in seconds between health checks.  Set to zero to disable health checks.  Checks disabled by default.")
 	healthCheckUnhealthy = flag.Int("health-check-unhealthy-threshold", 2, "A so-far healthy backend will be marked unhealthy after this many consecutive failures. The minimum value is 1.")
 
-	sessionCookieName    = flag.String("session-cookie-name", "", "Name of the session cookie; an empty value disables agent-based session tracking")
-	sessionCookieTimeout = flag.Duration("session-cookie-timeout", 10*time.Minute, "Expiration flag for the session cookie")
-	cookieLRU, _         = utils.NewCookieCache(cookieCacheLimit)
+	sessionCookieName       = flag.String("session-cookie-name", "", "Name of the session cookie; an empty value disables agent-based session tracking")
+	sessionCookieTimeout    = flag.Duration("session-cookie-timeout", 10*time.Minute, "Expiration flag for the session cookie")
+	sessionCookieCacheLimit = flag.Int("session-cookie-cache-limit", 1000, "Upper bound on the number of concurrent sessions that can be tracked by the agent")
+
+	cookieLRU *utils.CookieCache
 )
 
 func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) (http.Handler, error) {
@@ -320,6 +321,11 @@ func main() {
 	}
 	if !strings.HasPrefix(*healthCheckPath, "/") {
 		*healthCheckPath = "/" + *healthCheckPath
+	}
+	var err error
+	cookieLRU, err = utils.NewCookieCache(*sessionCookieCacheLimit)
+	if err != nil {
+		log.Fatal(err.Error())
 	}
 
 	waitForHealthy()
