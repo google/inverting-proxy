@@ -148,7 +148,9 @@ func forwardRequest(client *http.Client, hostProxy http.Handler, request *utils.
 		if _, err := httpRequest.Cookie(*sessionCookieName); err == http.ErrNoCookie {
 			// Assign a session ID
 			sessionID := uuid.New().String()
-			log.Printf("Assigned a new session ID: %q", sessionID)
+			if *debug {
+				log.Printf("Assigned a new session ID: %q", sessionID)
+			}
 
 			// Add cookie to the request
 			sessionCookie = &http.Cookie{
