@@ -238,7 +238,6 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case resp := <-pending.respChan:
 		defer resp.Body.Close()
-
 		// Copy all of the non-hop-by-hop headers to the proxied response
 		for name, vals := range resp.Header {
 			if !isHopByHopHeader(name) {
