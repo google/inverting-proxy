@@ -110,6 +110,62 @@ type ForwardedRequest struct {
 	Contents *http.Request
 }
 
+type sessionResponseWriter struct {
+	cj            *CookieCache
+	sessionID     string
+	urlForCookies *url.URL
+
+	wrapped     http.ResponseWriter
+	wroteHeader bool
+}
+
+func (w *sessionResponseWriter) Header() http.Header {
+	return w.wrapped.Header()
+}
+
+func (w *sessionResponseWriter) Write(bs []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.wrapped.Write(bs)
+}
+
+func (w *sessionResponseWriter) WriteHeader(statusCode int) {
+	if w.wroteHeader {
+		// Multiple calls ot WriteHeader are no-ops
+		return
+	}
+	w.wroteHeader = true
+	w.cj.interceptSession(w.sessionID, w, w.urlForCookies)
+	w.wrapped.WriteHeader(statusCode)
+}
+
+type sessionHandler struct {
+	cj      *CookieCache
+	wrapped http.Handler
+}
+
+func (h *sessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	urlForCookies := *(r.URL)
+	urlForCookies.Scheme = "https"
+	urlForCookies.Host = r.Host
+	sessionID := h.cj.extractAndRestoreSession(r, &urlForCookies)
+	w = &sessionResponseWriter{
+		cj:            h.cj,
+		sessionID:     sessionID,
+		urlForCookies: &urlForCookies,
+		wrapped:       w,
+	}
+	h.wrapped.ServeHTTP(w, r)
+}
+
+func (cj *CookieCache) SessionHandler(wrapped http.Handler) http.Handler {
+	return &sessionHandler{
+		cj:      cj,
+		wrapped: wrapped,
+	}
+}
+
 // CookieCache represents a LRU cache to store session ID -> CookieJar
 type CookieCache struct {
 	sessionCookieName    string
@@ -130,22 +186,22 @@ func NewCookieCache(sessionCookieName string, sessionCookieTimeout time.Duration
 	}, nil
 }
 
-// AddJarToCache takes a Jar from http.Client and stores it in a cache
-func (cj *CookieCache) AddJarToCache(sessionID string, jar http.CookieJar) {
+// addJarToCache takes a Jar from http.Client and stores it in a cache
+func (cj *CookieCache) addJarToCache(sessionID string, jar http.CookieJar) {
 	cj.mu.Lock()
 	cj.cache.Add(sessionID, jar)
 	cj.mu.Unlock()
 }
 
-// GetCachedCookieJar returns the CookieJar mapped to the sessionID
-func (cj *CookieCache) GetCachedCookieJar(sessionID string) (jar http.CookieJar, err error) {
+// cachedCookieJar returns the CookieJar mapped to the sessionID
+func (cj *CookieCache) cachedCookieJar(sessionID string) (jar http.CookieJar, err error) {
 	val, ok := cj.cache.Get(sessionID)
 	if !ok {
 		options := cookiejar.Options{
 			PublicSuffixList: publicsuffix.List,
 		}
 		jar, err = cookiejar.New(&options)
-		cj.AddJarToCache(sessionID, jar)
+		cj.addJarToCache(sessionID, jar)
 		return jar, err
 	}
 
@@ -156,14 +212,14 @@ func (cj *CookieCache) GetCachedCookieJar(sessionID string) (jar http.CookieJar,
 	return jar, nil
 }
 
-// InterceptSession modifies the given ResponseWriter by removing any Set-Cookie headers
+// interceptSession modifies the given ResponseWriter by removing any Set-Cookie headers
 // and instead adding those cookies to the corresponding session.
 //
 // If there is not already a session, and we have new cookies to save in the session, then
 // this method will create a new session, and set a session cookie for it.
 //
-// This is the inverse of ExtractAndRestoreSession.
-func (cj *CookieCache) InterceptSession(sessionID string, w http.ResponseWriter, u *url.URL) error {
+// This is the inverse of extractAndRestoreSession.
+func (cj *CookieCache) interceptSession(sessionID string, w http.ResponseWriter, u *url.URL) error {
 	if cj == nil {
 		return nil
 	}
@@ -190,7 +246,7 @@ func (cj *CookieCache) InterceptSession(sessionID string, w http.ResponseWriter,
 		header.Add("Set-Cookie", sessionCookie.String())
 	}
 
-	cookieJar, err := cj.GetCachedCookieJar(sessionID)
+	cookieJar, err := cj.cachedCookieJar(sessionID)
 	if err != nil {
 		log.Printf("Failure reading a cached cookie jar: %v", err)
 		return fmt.Errorf("Failure reading a cached cookie jar: %v", err)
@@ -199,43 +255,13 @@ func (cj *CookieCache) InterceptSession(sessionID string, w http.ResponseWriter,
 	return nil
 }
 
-type SessionResponseWriter struct {
-	cj            *CookieCache
-	sessionID     string
-	urlForCookies *url.URL
-
-	wrapped     http.ResponseWriter
-	wroteHeader bool
-}
-
-func (w *SessionResponseWriter) Header() http.Header {
-	return w.wrapped.Header()
-}
-
-func (w *SessionResponseWriter) Write(bs []byte) (int, error) {
-	if !w.wroteHeader {
-		w.WriteHeader(http.StatusOK)
-	}
-	return w.wrapped.Write(bs)
-}
-
-func (w *SessionResponseWriter) WriteHeader(statusCode int) {
-	if w.wroteHeader {
-		// Multiple calls ot WriteHeader are no-ops
-		return
-	}
-	w.wroteHeader = true
-	w.cj.InterceptSession(w.sessionID, w, w.urlForCookies)
-	w.wrapped.WriteHeader(statusCode)
-}
-
-// ExtractAndRestoreSession pulls the session ID cookie (if any) out of the given request,
+// extractAndRestoreSession pulls the session ID cookie (if any) out of the given request,
 // finds the corresponding session, and then adds any saved cookies for that session to the request.
 //
 // The return value is the session ID, or an empty string if there is no session.
 //
-// This is the inverse of InterceptSession.
-func (cj *CookieCache) ExtractAndRestoreSession(r *http.Request, u *url.URL) (sessionID string) {
+// This is the inverse of interceptSession.
+func (cj *CookieCache) extractAndRestoreSession(r *http.Request, u *url.URL) (sessionID string) {
 	if cj == nil {
 		return ""
 	}
@@ -247,7 +273,7 @@ func (cj *CookieCache) ExtractAndRestoreSession(r *http.Request, u *url.URL) (se
 	}
 
 	sessionID = sessionCookie.Value
-	cachedCookieJar, err := cj.GetCachedCookieJar(sessionID)
+	cachedCookieJar, err := cj.cachedCookieJar(sessionID)
 	if err != nil {
 		log.Printf("Failure reading the cookie jar for session %q: %v", sessionID, err)
 		// We are unable to fetch a cookie jar for the session, so we have no
@@ -270,32 +296,6 @@ func (cj *CookieCache) ExtractAndRestoreSession(r *http.Request, u *url.URL) (se
 		r.AddCookie(c)
 	}
 	return sessionID
-}
-
-type sessionHandler struct {
-	cj      *CookieCache
-	wrapped http.Handler
-}
-
-func (h *sessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	urlForCookies := *(r.URL)
-	urlForCookies.Scheme = "https"
-	urlForCookies.Host = r.Host
-	sessionID := h.cj.ExtractAndRestoreSession(r, &urlForCookies)
-	w = &SessionResponseWriter{
-		cj:            h.cj,
-		sessionID:     sessionID,
-		urlForCookies: &urlForCookies,
-		wrapped:       w,
-	}
-	h.wrapped.ServeHTTP(w, r)
-}
-
-func (cj *CookieCache) SessionHandler(wrapped http.Handler) http.Handler {
-	return &sessionHandler{
-		cj:      cj,
-		wrapped: wrapped,
-	}
 }
 
 // RequestCallback defines how the caller of `ReadRequest` uses the request that was read.
