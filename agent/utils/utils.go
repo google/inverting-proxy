@@ -199,6 +199,36 @@ func (cj *CookieCache) InterceptSession(sessionID string, w http.ResponseWriter,
 	return nil
 }
 
+type SessionResponseWriter struct {
+	cj            *CookieCache
+	sessionID     string
+	urlForCookies *url.URL
+
+	wrapped     http.ResponseWriter
+	wroteHeader bool
+}
+
+func (w *SessionResponseWriter) Header() http.Header {
+	return w.wrapped.Header()
+}
+
+func (w *SessionResponseWriter) Write(bs []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.wrapped.Write(bs)
+}
+
+func (w *SessionResponseWriter) WriteHeader(statusCode int) {
+	if w.wroteHeader {
+		// Multiple calls ot WriteHeader are no-ops
+		return
+	}
+	w.wroteHeader = true
+	w.cj.InterceptSession(w.sessionID, w, w.urlForCookies)
+	w.wrapped.WriteHeader(statusCode)
+}
+
 // ExtractAndRestoreSession pulls the session ID cookie (if any) out of the given request,
 // finds the corresponding session, and then adds any saved cookies for that session to the request.
 //
@@ -240,6 +270,32 @@ func (cj *CookieCache) ExtractAndRestoreSession(r *http.Request, u *url.URL) (se
 		r.AddCookie(c)
 	}
 	return sessionID
+}
+
+type sessionHandler struct {
+	cj      *CookieCache
+	wrapped http.Handler
+}
+
+func (h *sessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	urlForCookies := *(r.URL)
+	urlForCookies.Scheme = "https"
+	urlForCookies.Host = r.Host
+	sessionID := h.cj.ExtractAndRestoreSession(r, &urlForCookies)
+	w = &SessionResponseWriter{
+		cj:            h.cj,
+		sessionID:     sessionID,
+		urlForCookies: &urlForCookies,
+		wrapped:       w,
+	}
+	h.wrapped.ServeHTTP(w, r)
+}
+
+func (cj *CookieCache) SessionHandler(wrapped http.Handler) http.Handler {
+	return &sessionHandler{
+		cj:      cj,
+		wrapped: wrapped,
+	}
 }
 
 // RequestCallback defines how the caller of `ReadRequest` uses the request that was read.
@@ -423,10 +479,6 @@ func ReadRequest(client *http.Client, proxyHost, backendID, requestID string, ca
 // ResponseForwarder is used by the agent to forward a response from the backend
 // target to the inverting proxy.
 type ResponseForwarder struct {
-	cookieCache   *CookieCache
-	sessionID     string
-	urlForCookies *url.URL
-
 	proxyWriter        *io.PipeWriter
 	startedChan        chan struct{}
 	responseBodyWriter *io.PipeWriter
@@ -466,7 +518,7 @@ type ResponseForwarder struct {
 
 // NewResponseForwarder constructs a new ResponseForwarder that forwards to the
 // given proxy for the specified request.
-func NewResponseForwarder(client *http.Client, cookieCache *CookieCache, proxyHost, backendID, requestID, sessionID string, u *url.URL) (*ResponseForwarder, error) {
+func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID string) (*ResponseForwarder, error) {
 	// The contortions below support streaming.
 	//
 	// There are two pipes:
@@ -511,10 +563,6 @@ func NewResponseForwarder(client *http.Client, cookieCache *CookieCache, proxyHo
 	}()
 
 	responseForwarder := &ResponseForwarder{
-		cookieCache:   cookieCache,
-		sessionID:     sessionID,
-		urlForCookies: u,
-
 		response: &http.Response{
 			Proto:      "HTTP/1.1",
 			ProtoMajor: 1,
@@ -569,9 +617,6 @@ func (rf *ResponseForwarder) WriteHeader(code int) {
 	}
 	rf.wroteHeader = true
 
-	if err := rf.cookieCache.InterceptSession(rf.sessionID, rf, rf.urlForCookies); err != nil {
-		rf.forwardingErrors <- err
-	}
 	for k, v := range rf.header {
 		if _, ok := hopHeaders[k]; ok {
 			continue

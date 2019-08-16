@@ -91,19 +91,12 @@ func forwardRequest(client *http.Client, hostProxy http.Handler, request *utils.
 	if *forwardUserID {
 		httpRequest.Header.Add(utils.HeaderUserID, request.User)
 	}
-
-	urlForCookies := *(httpRequest.URL)
-	urlForCookies.Scheme = "https"
-	urlForCookies.Host = httpRequest.Host
-	sessionID := cookieLRU.ExtractAndRestoreSession(httpRequest, &urlForCookies)
-	if *debug {
-		log.Printf("Frontend request after restoring session %q: %+v", sessionID, httpRequest)
-	}
-	responseForwarder, err := utils.NewResponseForwarder(client, cookieLRU, *proxy, request.BackendID, request.RequestID, sessionID, &urlForCookies)
+	responseForwarder, err := utils.NewResponseForwarder(client, *proxy, request.BackendID, request.RequestID)
 	if err != nil {
 		return fmt.Errorf("failed to create the response forwarder: %v", err)
 	}
-	hostProxy.ServeHTTP(responseForwarder, httpRequest)
+	handler := cookieLRU.SessionHandler(hostProxy)
+	handler.ServeHTTP(responseForwarder, httpRequest)
 	if *debug {
 		log.Printf("Backend latency for request %s: %s\n", request.RequestID, time.Since(request.StartTime).String())
 	}
