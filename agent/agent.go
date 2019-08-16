@@ -41,6 +41,7 @@ import (
 	"golang.org/x/oauth2/google"
 	compute "google.golang.org/api/compute/v1"
 
+	"github.com/google/inverting-proxy/agent/sessions"
 	"github.com/google/inverting-proxy/agent/utils"
 	"github.com/google/inverting-proxy/agent/websockets"
 )
@@ -68,7 +69,7 @@ var (
 	sessionCookieTimeout    = flag.Duration("session-cookie-timeout", 10*time.Minute, "Expiration flag for the session cookie")
 	sessionCookieCacheLimit = flag.Int("session-cookie-cache-limit", 1000, "Upper bound on the number of concurrent sessions that can be tracked by the agent")
 
-	cookieLRU *utils.CookieCache
+	sessionLRU *sessions.Cache
 )
 
 func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) (http.Handler, error) {
@@ -85,7 +86,7 @@ func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) 
 			return nil, err
 		}
 	}
-	h = cookieLRU.SessionHandler(h)
+	h = sessionLRU.SessionHandler(h)
 	return h, nil
 }
 
@@ -254,7 +255,7 @@ func main() {
 	}
 	var err error
 	if *sessionCookieName != "" {
-		cookieLRU, err = utils.NewCookieCache(*sessionCookieName, *sessionCookieTimeout, *sessionCookieCacheLimit, *disableSSLForTest)
+		sessionLRU, err = sessions.NewCache(*sessionCookieName, *sessionCookieTimeout, *sessionCookieCacheLimit, *disableSSLForTest)
 	}
 	if err != nil {
 		log.Fatal(err.Error())
