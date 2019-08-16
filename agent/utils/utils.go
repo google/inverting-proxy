@@ -205,12 +205,12 @@ func (cj *CookieCache) InterceptSession(sessionID string, w http.ResponseWriter,
 // The return value is the session ID, or an empty string if there is no session.
 //
 // This is the inverse of InterceptSession.
-func (cj *CookieCache) ExtractAndRestoreSession(sessionCookieName string, r *http.Request, u *url.URL) (sessionID string) {
+func (cj *CookieCache) ExtractAndRestoreSession(r *http.Request, u *url.URL) (sessionID string) {
 	if cj == nil {
 		return ""
 	}
 
-	sessionCookie, err := r.Cookie(sessionCookieName)
+	sessionCookie, err := r.Cookie(cj.sessionCookieName)
 	if err != nil || sessionCookie == nil {
 		// There is no session cookie, so we have nothing to do.
 		return ""
@@ -229,7 +229,7 @@ func (cj *CookieCache) ExtractAndRestoreSession(sessionCookieName string, r *htt
 	existingCookies := r.Cookies()
 	r.Header.Del("Cookie")
 	for _, c := range existingCookies {
-		if c.Name != sessionCookieName {
+		if c.Name != cj.sessionCookieName {
 			r.AddCookie(c)
 		}
 	}

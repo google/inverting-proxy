@@ -95,7 +95,7 @@ func forwardRequest(client *http.Client, hostProxy http.Handler, request *utils.
 	urlForCookies := *(httpRequest.URL)
 	urlForCookies.Scheme = "https"
 	urlForCookies.Host = httpRequest.Host
-	sessionID := cookieLRU.ExtractAndRestoreSession(*sessionCookieName, httpRequest, &urlForCookies)
+	sessionID := cookieLRU.ExtractAndRestoreSession(httpRequest, &urlForCookies)
 	if *debug {
 		log.Printf("Frontend request after restoring session %q: %+v", sessionID, httpRequest)
 	}
