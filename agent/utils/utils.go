@@ -29,11 +29,13 @@ import (
 	"math/rand"
 	"net/http"
 	"net/http/cookiejar"
+	"net/url"
 	"sync"
 	"time"
 
 	"cloud.google.com/go/compute/metadata"
 	"github.com/golang/groupcache/lru"
+	"github.com/google/uuid"
 	"golang.org/x/net/publicsuffix"
 )
 
@@ -110,14 +112,21 @@ type ForwardedRequest struct {
 
 // CookieCache represents a LRU cache to store session ID -> CookieJar
 type CookieCache struct {
+	sessionCookieName    string
+	sessionCookieTimeout time.Duration
+	disableSSLForTest    bool
+
 	cache *lru.Cache
 	mu    sync.Mutex
 }
 
 // NewCookieCache initializes an LRU cache with cookieCacheLimit entries
-func NewCookieCache(cookieCacheLimit int) (*CookieCache, error) {
+func NewCookieCache(sessionCookieName string, sessionCookieTimeout time.Duration, cookieCacheLimit int, disableSSLForTest bool) (*CookieCache, error) {
 	return &CookieCache{
-		cache: lru.New(cookieCacheLimit),
+		sessionCookieName:    sessionCookieName,
+		sessionCookieTimeout: sessionCookieTimeout,
+		disableSSLForTest:    disableSSLForTest,
+		cache:                lru.New(cookieCacheLimit),
 	}, nil
 }
 
@@ -145,6 +154,92 @@ func (cj *CookieCache) GetCachedCookieJar(sessionID string) (jar http.CookieJar,
 		return nil, fmt.Errorf("Internal error; unexpected type for value (%+v) stored in the cookie jar cache", val)
 	}
 	return jar, nil
+}
+
+// InterceptSession modifies the given ResponseWriter by removing any Set-Cookie headers
+// and instead adding those cookies to the corresponding session.
+//
+// If there is not already a session, and we have new cookies to save in the session, then
+// this method will create a new session, and set a session cookie for it.
+//
+// This is the inverse of ExtractAndRestoreSession.
+func (cj *CookieCache) InterceptSession(sessionID string, w http.ResponseWriter, u *url.URL) error {
+	if cj == nil {
+		return nil
+	}
+
+	header := w.Header()
+	cookiesToAdd := (&http.Response{Header: header}).Cookies()
+	if len(cookiesToAdd) == 0 {
+		// There were no cookies to intercept
+		return nil
+	}
+
+	header.Del("Set-Cookie")
+	if sessionID == "" {
+		// No session was previously defined, so we need to create a new one
+		sessionID = uuid.New().String()
+		sessionCookie := &http.Cookie{
+			Name:     cj.sessionCookieName,
+			Value:    sessionID,
+			Path:     "/",
+			Secure:   !cj.disableSSLForTest,
+			HttpOnly: true,
+			Expires:  time.Now().Add(cj.sessionCookieTimeout),
+		}
+		header.Add("Set-Cookie", sessionCookie.String())
+	}
+
+	cookieJar, err := cj.GetCachedCookieJar(sessionID)
+	if err != nil {
+		log.Printf("Failure reading a cached cookie jar: %v", err)
+		return fmt.Errorf("Failure reading a cached cookie jar: %v", err)
+	}
+	cookieJar.SetCookies(u, cookiesToAdd)
+	return nil
+}
+
+// ExtractAndRestoreSession pulls the session ID cookie (if any) out of the given request,
+// finds the corresponding session, and then adds any saved cookies for that session to the request.
+//
+// The return value is the session ID, or an empty string if there is no session.
+//
+// This is the inverse of InterceptSession.
+func (cj *CookieCache) ExtractAndRestoreSession(sessionCookieName string, r *http.Request, u *url.URL) (sessionID string) {
+	if cj == nil {
+		return ""
+	}
+
+	sessionCookie, err := r.Cookie(sessionCookieName)
+	if err != nil || sessionCookie == nil {
+		// There is no session cookie, so we have nothing to do.
+		return ""
+	}
+
+	sessionID = sessionCookie.Value
+	cachedCookieJar, err := cj.GetCachedCookieJar(sessionID)
+	if err != nil {
+		log.Printf("Failure reading the cookie jar for session %q: %v", sessionID, err)
+		// We are unable to fetch a cookie jar for the session, so we have no
+		// existing, cached cookies to insert into the request.
+		return ""
+	}
+
+	// Remove the session cookie
+	existingCookies := r.Cookies()
+	r.Header.Del("Cookie")
+	for _, c := range existingCookies {
+		if c.Name != sessionCookieName {
+			r.AddCookie(c)
+		}
+	}
+
+	// Restore any cached cookies from the session
+	cachedCookies := cachedCookieJar.Cookies(u)
+	for _, c := range cachedCookies {
+		r.AddCookie(c)
+	}
+	return sessionID
 }
 
 // RequestCallback defines how the caller of `ReadRequest` uses the request that was read.
@@ -328,6 +423,10 @@ func ReadRequest(client *http.Client, proxyHost, backendID, requestID string, ca
 // ResponseForwarder is used by the agent to forward a response from the backend
 // target to the inverting proxy.
 type ResponseForwarder struct {
+	cookieCache   *CookieCache
+	sessionID     string
+	urlForCookies *url.URL
+
 	proxyWriter        *io.PipeWriter
 	startedChan        chan struct{}
 	responseBodyWriter *io.PipeWriter
@@ -367,7 +466,7 @@ type ResponseForwarder struct {
 
 // NewResponseForwarder constructs a new ResponseForwarder that forwards to the
 // given proxy for the specified request.
-func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID string, sessionCookie *http.Cookie) (*ResponseForwarder, error) {
+func NewResponseForwarder(client *http.Client, cookieCache *CookieCache, proxyHost, backendID, requestID, sessionID string, u *url.URL) (*ResponseForwarder, error) {
 	// The contortions below support streaming.
 	//
 	// There are two pipes:
@@ -411,16 +510,16 @@ func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID s
 		close(proxyClientErrChan)
 	}()
 
-	responseHeader := make(http.Header)
-	if sessionCookie != nil {
-		responseHeader.Add("Set-Cookie", sessionCookie.String())
-	}
 	responseForwarder := &ResponseForwarder{
+		cookieCache:   cookieCache,
+		sessionID:     sessionID,
+		urlForCookies: u,
+
 		response: &http.Response{
 			Proto:      "HTTP/1.1",
 			ProtoMajor: 1,
 			ProtoMinor: 1,
-			Header:     responseHeader,
+			Header:     make(http.Header),
 			Body:       responseBodyReader,
 		},
 		wroteHeader:        false,
@@ -469,6 +568,10 @@ func (rf *ResponseForwarder) WriteHeader(code int) {
 		return
 	}
 	rf.wroteHeader = true
+
+	if err := rf.cookieCache.InterceptSession(rf.sessionID, rf, rf.urlForCookies); err != nil {
+		rf.forwardingErrors <- err
+	}
 	for k, v := range rf.header {
 		if _, ok := hopHeaders[k]; ok {
 			continue

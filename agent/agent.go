@@ -43,7 +43,6 @@ import (
 
 	"github.com/google/inverting-proxy/agent/utils"
 	"github.com/google/inverting-proxy/agent/websockets"
-	"github.com/google/uuid"
 )
 
 const (
@@ -78,56 +77,6 @@ func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) 
 		Host:   host,
 	})
 
-	if *sessionCookieName != "" {
-		existingDirector := hostProxy.Director
-
-		hostProxy.Director = func(r *http.Request) {
-			existingDirector(r)
-
-			sessionCookie, err := r.Cookie(*sessionCookieName)
-
-			if err != nil {
-				// This should not happen, should have a session cookie by this point
-				log.Fatal(err)
-			} else {
-				if sessionCookie != nil {
-					sessionID := sessionCookie.Value
-					cachedCookieJar, err := cookieLRU.GetCachedCookieJar(sessionID)
-					if err != nil {
-						log.Fatal("No cached cookie jar")
-					}
-
-					cookies := cachedCookieJar.Cookies(r.URL)
-					// Add the cookies to the request header
-					for c := range cookies {
-						r.AddCookie(cookies[c])
-					}
-				}
-
-			}
-		}
-
-		hostProxy.ModifyResponse = func(res *http.Response) error {
-			sessionCookie, err := res.Request.Cookie(*sessionCookieName)
-			if err != nil {
-				log.Fatal(err)
-			}
-
-			cookieJar, err := cookieLRU.GetCachedCookieJar(sessionCookie.Value)
-			if err != nil {
-				log.Fatal("No cached cookie jar")
-			}
-
-			// Add any cookies in the responses' header to the cookie jar
-			cookiesToAdd := res.Cookies()
-			cookieJar.SetCookies(res.Request.URL, cookiesToAdd)
-			// Remove Set-Cookie headers from the response
-			res.Header.Del("Set-Cookie")
-
-			return nil
-		}
-	}
-
 	hostProxy.FlushInterval = 100 * time.Millisecond
 	if shimPath == "" {
 		return hostProxy, nil
@@ -143,29 +92,14 @@ func forwardRequest(client *http.Client, hostProxy http.Handler, request *utils.
 		httpRequest.Header.Add(utils.HeaderUserID, request.User)
 	}
 
-	var sessionCookie *http.Cookie
-	if *sessionCookieName != "" {
-		if _, err := httpRequest.Cookie(*sessionCookieName); err == http.ErrNoCookie {
-			// Assign a session ID
-			sessionID := uuid.New().String()
-			if *debug {
-				log.Printf("Assigned a new session ID: %q", sessionID)
-			}
-
-			// Add cookie to the request
-			sessionCookie = &http.Cookie{
-				Name:     *sessionCookieName,
-				Value:    sessionID,
-				Path:     httpRequest.URL.String(),
-				Secure:   !*disableSSLForTest,
-				HttpOnly: true,
-				Expires:  time.Now().Add(*sessionCookieTimeout),
-			}
-			httpRequest.AddCookie(sessionCookie)
-		}
+	urlForCookies := *(httpRequest.URL)
+	urlForCookies.Scheme = "https"
+	urlForCookies.Host = httpRequest.Host
+	sessionID := cookieLRU.ExtractAndRestoreSession(*sessionCookieName, httpRequest, &urlForCookies)
+	if *debug {
+		log.Printf("Frontend request after restoring session %q: %+v", sessionID, httpRequest)
 	}
-
-	responseForwarder, err := utils.NewResponseForwarder(client, *proxy, request.BackendID, request.RequestID, sessionCookie)
+	responseForwarder, err := utils.NewResponseForwarder(client, cookieLRU, *proxy, request.BackendID, request.RequestID, sessionID, &urlForCookies)
 	if err != nil {
 		return fmt.Errorf("failed to create the response forwarder: %v", err)
 	}
@@ -322,7 +256,9 @@ func main() {
 		*healthCheckPath = "/" + *healthCheckPath
 	}
 	var err error
-	cookieLRU, err = utils.NewCookieCache(*sessionCookieCacheLimit)
+	if *sessionCookieName != "" {
+		cookieLRU, err = utils.NewCookieCache(*sessionCookieName, *sessionCookieTimeout, *sessionCookieCacheLimit, *disableSSLForTest)
+	}
 	if err != nil {
 		log.Fatal(err.Error())
 	}

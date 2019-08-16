@@ -154,7 +154,7 @@ func TestResponseForwarder(t *testing.T) {
 	}))
 	defer proxyServer.Close()
 	proxyClient := proxyServer.Client()
-	responseForwarder, err := NewResponseForwarder(proxyClient, proxyServer.URL+"/", backendID, requestID, nil)
+	responseForwarder, err := NewResponseForwarder(proxyClient, nil, proxyServer.URL+"/", backendID, requestID, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +196,7 @@ func TestResponseForwarderWithProxyHangup(t *testing.T) {
 	}))
 	defer proxyServer.Close()
 	proxyClient := proxyServer.Client()
-	responseForwarder, err := NewResponseForwarder(proxyClient, proxyServer.URL+"/", backendID, requestID, nil)
+	responseForwarder, err := NewResponseForwarder(proxyClient, nil, proxyServer.URL+"/", backendID, requestID, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
