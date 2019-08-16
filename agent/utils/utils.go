@@ -562,7 +562,7 @@ func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID s
 		close(proxyClientErrChan)
 	}()
 
-	responseForwarder := &ResponseForwarder{
+	return &ResponseForwarder{
 		response: &http.Response{
 			Proto:      "HTTP/1.1",
 			ProtoMajor: 1,
@@ -578,8 +578,7 @@ func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID s
 		proxyClientErrors:  proxyClientErrChan,
 		forwardingErrors:   forwardingErrChan,
 		writeErrors:        writeErrChan,
-	}
-	return responseForwarder, nil
+	}, nil
 }
 
 func (rf *ResponseForwarder) notify() {
@@ -616,7 +615,6 @@ func (rf *ResponseForwarder) WriteHeader(code int) {
 		return
 	}
 	rf.wroteHeader = true
-
 	for k, v := range rf.header {
 		if _, ok := hopHeaders[k]; ok {
 			continue
