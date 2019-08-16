@@ -76,12 +76,17 @@ func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) 
 		Scheme: "http",
 		Host:   host,
 	})
-
 	hostProxy.FlushInterval = 100 * time.Millisecond
-	if shimPath == "" {
-		return hostProxy, nil
+	var h http.Handler = hostProxy
+	if shimPath != "" {
+		var err error
+		h, err = websockets.Proxy(ctx, hostProxy, host, shimPath, injectShimCode)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return websockets.Proxy(ctx, hostProxy, host, shimPath, injectShimCode)
+	h = cookieLRU.SessionHandler(h)
+	return h, nil
 }
 
 // forwardRequest forwards the given request from the proxy to
@@ -95,8 +100,7 @@ func forwardRequest(client *http.Client, hostProxy http.Handler, request *utils.
 	if err != nil {
 		return fmt.Errorf("failed to create the response forwarder: %v", err)
 	}
-	handler := cookieLRU.SessionHandler(hostProxy)
-	handler.ServeHTTP(responseForwarder, httpRequest)
+	hostProxy.ServeHTTP(responseForwarder, httpRequest)
 	if *debug {
 		log.Printf("Backend latency for request %s: %s\n", request.RequestID, time.Since(request.StartTime).String())
 	}
