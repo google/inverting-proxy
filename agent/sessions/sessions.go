@@ -82,6 +82,9 @@ func (h *sessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // SessionHandler returns an instance of `http.Handler` that wraps the given handler and adds proxy-side session tracking.
 func (cj *Cache) SessionHandler(wrapped http.Handler) http.Handler {
+	if cj == nil {
+		return wrapped
+	}
 	return &sessionHandler{
 		cj:      cj,
 		wrapped: wrapped,
@@ -142,10 +145,6 @@ func (cj *Cache) cachedCookieJar(sessionID string) (jar http.CookieJar, err erro
 //
 // This is the inverse of extractAndRestoreSession.
 func (cj *Cache) interceptSession(sessionID string, w http.ResponseWriter, u *url.URL) error {
-	if cj == nil {
-		return nil
-	}
-
 	header := w.Header()
 	cookiesToAdd := (&http.Response{Header: header}).Cookies()
 	if len(cookiesToAdd) == 0 {
@@ -184,10 +183,6 @@ func (cj *Cache) interceptSession(sessionID string, w http.ResponseWriter, u *ur
 //
 // This is the inverse of interceptSession.
 func (cj *Cache) extractAndRestoreSession(r *http.Request, u *url.URL) (sessionID string) {
-	if cj == nil {
-		return ""
-	}
-
 	sessionCookie, err := r.Cookie(cj.sessionCookieName)
 	if err != nil || sessionCookie == nil {
 		// There is no session cookie, so we have nothing to do.
