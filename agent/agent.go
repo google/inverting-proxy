@@ -253,12 +253,8 @@ func main() {
 	if !strings.HasPrefix(*healthCheckPath, "/") {
 		*healthCheckPath = "/" + *healthCheckPath
 	}
-	var err error
 	if *sessionCookieName != "" {
-		sessionLRU, err = sessions.NewCache(*sessionCookieName, *sessionCookieTimeout, *sessionCookieCacheLimit, *disableSSLForTest)
-	}
-	if err != nil {
-		log.Fatal(err.Error())
+		sessionLRU = sessions.NewCache(*sessionCookieName, *sessionCookieTimeout, *sessionCookieCacheLimit, *disableSSLForTest)
 	}
 
 	waitForHealthy()

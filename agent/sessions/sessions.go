@@ -15,6 +15,31 @@ limitations under the License.
 */
 
 // Package sessions implements proxy-side user session tracking for reverse proxies.
+//
+// This is done by intercepting cookies set by the backend servers, storing them
+// inside of "sessions" maintained by the proxy, and then replacing them by
+// a single cookie used to track the user's proxy-side session.
+//
+// Encapsulating all cookies into a single session cookie allows the proxy
+// administrator to enforce cookie policies such as maximum cookie lifetimes
+// or requiring cookies to be sent over SSL.
+//
+// Note: This is designed for use in reverse proxies (where the same administrator
+// controls both the proxy and the backing server). It would not be appropriate for
+// traditional proxies (where the proxy and backend server are unrelated), as
+// traditional proxies should just act as dumb pipes rather than components of an
+// app that integrates the proxy with the backend server(s).
+//
+// Example usage:
+//	wrappedHandler := ...
+//	...
+//	sessionCookieName := "proxy-session-cookie-name"
+//	sessionLifetime := 24*time.Hour
+//	sessionCacheLimit := 100
+//	c, err := sessions.NewCache(sessionCookieName, sessionLifetime, sessionCacheLimit, false)
+//	h := c.SessionHandler(wrappedHandler)
+//	...
+//	h.ServeHTTP(w, r)
 package sessions
 
 import (
@@ -143,12 +168,12 @@ func (h *sessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // SessionHandler returns an instance of `http.Handler` that wraps the given handler and adds proxy-side session tracking.
-func (cj *Cache) SessionHandler(wrapped http.Handler) http.Handler {
-	if cj == nil {
+func (c *Cache) SessionHandler(wrapped http.Handler) http.Handler {
+	if c == nil {
 		return wrapped
 	}
 	return &sessionHandler{
-		c:       cj,
+		c:       c,
 		wrapped: wrapped,
 	}
 }
@@ -164,31 +189,31 @@ type Cache struct {
 }
 
 // NewCache initializes an LRU session cache
-func NewCache(sessionCookieName string, sessionCookieTimeout time.Duration, cookieCacheLimit int, disableSSLForTest bool) (*Cache, error) {
+func NewCache(sessionCookieName string, sessionCookieTimeout time.Duration, cookieCacheLimit int, disableSSLForTest bool) *Cache {
 	return &Cache{
 		sessionCookieName:    sessionCookieName,
 		sessionCookieTimeout: sessionCookieTimeout,
 		disableSSLForTest:    disableSSLForTest,
 		cache:                lru.New(cookieCacheLimit),
-	}, nil
+	}
 }
 
 // addJarToCache takes a Jar from http.Client and stores it in a cache
-func (cj *Cache) addJarToCache(sessionID string, jar http.CookieJar) {
-	cj.mu.Lock()
-	cj.cache.Add(sessionID, jar)
-	cj.mu.Unlock()
+func (c *Cache) addJarToCache(sessionID string, jar http.CookieJar) {
+	c.mu.Lock()
+	c.cache.Add(sessionID, jar)
+	c.mu.Unlock()
 }
 
 // cachedCookieJar returns the CookieJar mapped to the sessionID
-func (cj *Cache) cachedCookieJar(sessionID string) (jar http.CookieJar, err error) {
-	val, ok := cj.cache.Get(sessionID)
+func (c *Cache) cachedCookieJar(sessionID string) (jar http.CookieJar, err error) {
+	val, ok := c.cache.Get(sessionID)
 	if !ok {
 		options := cookiejar.Options{
 			PublicSuffixList: publicsuffix.List,
 		}
 		jar, err = cookiejar.New(&options)
-		cj.addJarToCache(sessionID, jar)
+		c.addJarToCache(sessionID, jar)
 		return jar, err
 	}
 
