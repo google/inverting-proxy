@@ -23,6 +23,7 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -34,13 +35,34 @@ import (
 	"time"
 
 	"context"
+
+	"github.com/google/uuid"
+	"golang.org/x/net/publicsuffix"
 )
 
-func checkRequest(proxyURL, testPath, want string, timeout time.Duration) error {
+const (
+	backendCookie = "backend-cookie"
+	sessionCookie = "proxy-sessions-cookie"
+)
+
+func checkRequest(proxyURL, testPath, want string, timeout time.Duration, expectedCookie string) error {
+	jarOptions := cookiejar.Options{
+		PublicSuffixList: publicsuffix.List,
+	}
+	jar, err := cookiejar.New(&jarOptions)
+	if err != nil {
+		return fmt.Errorf("Failure creating a cookie jar: %v", err)
+	}
 	client := &http.Client{
 		Timeout: timeout,
+		Jar:     jar,
 	}
-	resp, err := client.Get(proxyURL + testPath)
+	reqURL := proxyURL + testPath
+	parsedReqURL, err := url.Parse(reqURL)
+	if err != nil {
+		return fmt.Errorf("internal error parsing a test URL: %v", err)
+	}
+	resp, err := client.Get(reqURL)
 	if err != nil {
 		return fmt.Errorf("failed to issue a frontend GET request: %v", err)
 	}
@@ -51,6 +73,13 @@ func checkRequest(proxyURL, testPath, want string, timeout time.Duration) error 
 	}
 	if got := string(body); got != want {
 		return fmt.Errorf("unexpected proxy frontend response; got %q, want %q", got, want)
+	}
+
+	cookies := jar.Cookies(parsedReqURL)
+	if len(cookies) != 1 {
+		return fmt.Errorf("unexpected number of cookies set: %v", cookies)
+	} else if got, want := cookies[0].Name, expectedCookie; got != want {
+		return fmt.Errorf("unexpected response cookie set: got %q, want %q", got, want)
 	}
 	return nil
 }
@@ -86,22 +115,33 @@ func RunLocalProxy(ctx context.Context, t *testing.T) (int, error) {
 	return 0, fmt.Errorf("Locally-running proxy failed to start up in time: %q", proxyOut.String())
 }
 
-func TestWithInMemoryProxyAndBackend(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	backendHomeDir, err := ioutil.TempDir("", "backend-home")
-	if err != nil {
-		t.Fatalf("Failed to set up a temporary home directory for the test: %v", err)
-	}
-	gcloudCfg := filepath.Join(backendHomeDir, ".config", "gcloud")
-	if err := os.MkdirAll(gcloudCfg, os.ModePerm); err != nil {
-		t.Fatalf("Failed to set up a temporary home directory for the test: %v", err)
-	}
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Logf("Responding to backend request to %q", r.URL.Path)
+func RunBackend(ctx context.Context, t *testing.T) string {
+	backendCookieVal := uuid.New().String()
+	backendServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		bc, err := r.Cookie(backendCookie)
+		if err == http.ErrNoCookie || bc == nil {
+			bc = &http.Cookie{
+				Name:     backendCookie,
+				Value:    backendCookieVal,
+				HttpOnly: true,
+			}
+			http.SetCookie(w, bc)
+			http.Redirect(w, r, r.URL.String(), http.StatusTemporaryRedirect)
+			return
+		}
+		if got, want := bc.Value, backendCookieVal; got != want {
+			t.Errorf("Unexepected backend cookie value: got %q, want %q", got, want)
+		}
 		w.Write([]byte(r.URL.Path))
 	}))
+	go func() {
+		<-ctx.Done()
+		backendServer.Close()
+	}()
+	return backendServer.URL
+}
+
+func RunFakeMetadataServer(ctx context.Context, t *testing.T) string {
 	fakeMetadata := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Emulate slow responses from the metadata server, to check that the agent
 		// is appropriately caching the results.
@@ -128,13 +168,29 @@ func TestWithInMemoryProxyAndBackend(t *testing.T) {
 			return
 		}
 	}))
-
 	go func() {
 		<-ctx.Done()
-		backend.Close()
 		fakeMetadata.Close()
 	}()
-	backendURL, err := url.Parse(backend.URL)
+	return fakeMetadata.URL
+}
+
+func TestWithInMemoryProxyAndBackend(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	backendHomeDir, err := ioutil.TempDir("", "backend-home")
+	if err != nil {
+		t.Fatalf("Failed to set up a temporary home directory for the test: %v", err)
+	}
+	gcloudCfg := filepath.Join(backendHomeDir, ".config", "gcloud")
+	if err := os.MkdirAll(gcloudCfg, os.ModePerm); err != nil {
+		t.Fatalf("Failed to set up a temporary home directory for the test: %v", err)
+	}
+	backendURL := RunBackend(ctx, t)
+	fakeMetadataURL := RunFakeMetadataServer(ctx, t)
+
+	parsedBackendURL, err := url.Parse(backendURL)
 	if err != nil {
 		t.Fatalf("Failed to parse the backend URL: %v", err)
 	}
@@ -143,7 +199,7 @@ func TestWithInMemoryProxyAndBackend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to run the local inverting proxy: %v", err)
 	}
-	t.Logf("Started backend at localhost:%s and proxy at %s", backendURL.Port(), proxyURL)
+	t.Logf("Started backend at localhost:%s and proxy at %s", parsedBackendURL.Port(), proxyURL)
 
 	// This assumes that "Make build" has been run
 	args := strings.Join(append(
@@ -151,14 +207,14 @@ func TestWithInMemoryProxyAndBackend(t *testing.T) {
 		"--debug=true",
 		"--backend=testBackend",
 		"--proxy", proxyURL+"/",
-		"--host=localhost:"+backendURL.Port()),
+		"--host=localhost:"+parsedBackendURL.Port()),
 		" ")
 	agentCmd := exec.CommandContext(ctx, "/bin/bash", "-c", args)
 
 	var out bytes.Buffer
 	agentCmd.Stdout = &out
 	agentCmd.Stderr = &out
-	agentCmd.Env = append(os.Environ(), "PATH=", "HOME="+backendHomeDir, "GCE_METADATA_HOST="+strings.TrimPrefix(fakeMetadata.URL, "http://"))
+	agentCmd.Env = append(os.Environ(), "PATH=", "HOME="+backendHomeDir, "GCE_METADATA_HOST="+strings.TrimPrefix(fakeMetadataURL, "http://"))
 	if err := agentCmd.Start(); err != nil {
 		t.Fatalf("Failed to start the agent binary: %v", err)
 	}
@@ -173,7 +229,7 @@ func TestWithInMemoryProxyAndBackend(t *testing.T) {
 	// We give this initial request a long time to complete, as the agent takes
 	// a long time to start up.
 	testPath := "/some/request/path"
-	if err := checkRequest(proxyURL, testPath, testPath, time.Second); err != nil {
+	if err := checkRequest(proxyURL, testPath, testPath, time.Second, backendCookie); err != nil {
 		t.Fatalf("Failed to send the initial request: %v", err)
 	}
 
@@ -184,7 +240,80 @@ func TestWithInMemoryProxyAndBackend(t *testing.T) {
 		//
 		// The specific value was chosen by running the test in a loop 100 times and
 		// incrementing the value until all 100 runs passed.
-		if err := checkRequest(proxyURL, testPath, testPath, 100*time.Millisecond); err != nil {
+		if err := checkRequest(proxyURL, testPath, testPath, 100*time.Millisecond, backendCookie); err != nil {
+			t.Fatalf("Failed to send request %d: %v", i, err)
+		}
+	}
+}
+
+func TestWithInMemoryProxyAndBackendWithSessions(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	backendHomeDir, err := ioutil.TempDir("", "backend-home")
+	if err != nil {
+		t.Fatalf("Failed to set up a temporary home directory for the test: %v", err)
+	}
+	gcloudCfg := filepath.Join(backendHomeDir, ".config", "gcloud")
+	if err := os.MkdirAll(gcloudCfg, os.ModePerm); err != nil {
+		t.Fatalf("Failed to set up a temporary home directory for the test: %v", err)
+	}
+	backendURL := RunBackend(ctx, t)
+	fakeMetadataURL := RunFakeMetadataServer(ctx, t)
+
+	parsedBackendURL, err := url.Parse(backendURL)
+	if err != nil {
+		t.Fatalf("Failed to parse the backend URL: %v", err)
+	}
+	proxyPort, err := RunLocalProxy(ctx, t)
+	proxyURL := fmt.Sprintf("http://localhost:%d", proxyPort)
+	if err != nil {
+		t.Fatalf("Failed to run the local inverting proxy: %v", err)
+	}
+	t.Logf("Started backend at localhost:%s and proxy at %s", parsedBackendURL.Port(), proxyURL)
+
+	// This assumes that "Make build" has been run
+	args := strings.Join(append(
+		[]string{"${GOPATH}/bin/proxy-forwarding-agent"},
+		"--debug=true",
+		"--backend=testBackend",
+		"--proxy", proxyURL+"/",
+		"--session-cookie-name="+sessionCookie,
+		"--disable-ssl-for-test=true",
+		"--host=localhost:"+parsedBackendURL.Port()),
+		" ")
+	agentCmd := exec.CommandContext(ctx, "/bin/bash", "-c", args)
+
+	var out bytes.Buffer
+	agentCmd.Stdout = &out
+	agentCmd.Stderr = &out
+	agentCmd.Env = append(os.Environ(), "PATH=", "HOME="+backendHomeDir, "GCE_METADATA_HOST="+strings.TrimPrefix(fakeMetadataURL, "http://"))
+	if err := agentCmd.Start(); err != nil {
+		t.Fatalf("Failed to start the agent binary: %v", err)
+	}
+	defer func() {
+		cancel()
+		err := agentCmd.Wait()
+		t.Logf("Agent result: %v, stdout/stderr: %q", err, out.String())
+	}()
+
+	// Send one request through the proxy to make sure the agent has come up.
+	//
+	// We give this initial request a long time to complete, as the agent takes
+	// a long time to start up.
+	testPath := "/some/request/path"
+	if err := checkRequest(proxyURL, testPath, testPath, time.Second, sessionCookie); err != nil {
+		t.Fatalf("Failed to send the initial request: %v", err)
+	}
+
+	for i := 0; i < 10; i++ {
+		// The timeout below was chosen to be overly generous to prevent test flakiness.
+		//
+		// This has the consequence that it will only catch severe latency regressions.
+		//
+		// The specific value was chosen by running the test in a loop 100 times and
+		// incrementing the value until all 100 runs passed.
+		if err := checkRequest(proxyURL, testPath, testPath, 100*time.Millisecond, sessionCookie); err != nil {
 			t.Fatalf("Failed to send request %d: %v", i, err)
 		}
 	}
