@@ -32,7 +32,7 @@ import (
 )
 
 type sessionResponseWriter struct {
-	cj            *Cache
+	c             *Cache
 	sessionID     string
 	urlForCookies *url.URL
 
@@ -57,22 +57,84 @@ func (w *sessionResponseWriter) WriteHeader(statusCode int) {
 		return
 	}
 	w.wroteHeader = true
-	w.cj.interceptSession(w.sessionID, w, w.urlForCookies)
+	header := w.Header()
+	cookiesToAdd := (&http.Response{Header: header}).Cookies()
+	if len(cookiesToAdd) == 0 {
+		// There were no cookies to intercept
+		w.wrapped.WriteHeader(statusCode)
+		return
+	}
+	header.Del("Set-Cookie")
+	if w.sessionID == "" {
+		// No session was previously defined, so we need to create a new one
+		w.sessionID = uuid.New().String()
+		sessionCookie := &http.Cookie{
+			Name:     w.c.sessionCookieName,
+			Value:    w.sessionID,
+			Path:     "/",
+			Secure:   !w.c.disableSSLForTest,
+			HttpOnly: true,
+			Expires:  time.Now().Add(w.c.sessionCookieTimeout),
+		}
+		header.Add("Set-Cookie", sessionCookie.String())
+	}
+	cookieJar, err := w.c.cachedCookieJar(w.sessionID)
+	if err != nil {
+		log.Printf("Failure reading a cached cookie jar: %v", err)
+	}
+	cookieJar.SetCookies(w.urlForCookies, cookiesToAdd)
 	w.wrapped.WriteHeader(statusCode)
 }
 
 type sessionHandler struct {
-	cj      *Cache
+	c       *Cache
 	wrapped http.Handler
 }
 
+func (h *sessionHandler) extractSessionID(r *http.Request) string {
+	sessionCookie, err := r.Cookie(h.c.sessionCookieName)
+	if err != nil || sessionCookie == nil {
+		// There is no session cookie, so we do not (yet) have a session
+		return ""
+	}
+	return sessionCookie.Value
+}
+
+func (h *sessionHandler) restoreSession(r *http.Request, cachedCookies []*http.Cookie) {
+	// Remove the session cookie
+	existingCookies := r.Cookies()
+	r.Header.Del("Cookie")
+	for _, c := range existingCookies {
+		if c.Name != h.c.sessionCookieName {
+			r.AddCookie(c)
+		}
+	}
+
+	// Restore any cached cookies from the session
+	for _, c := range cachedCookies {
+		r.AddCookie(c)
+	}
+}
+
+// ServeHTTP implements the http.Handler interface
 func (h *sessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	urlForCookies := *(r.URL)
 	urlForCookies.Scheme = "https"
 	urlForCookies.Host = r.Host
-	sessionID := h.cj.extractAndRestoreSession(r, &urlForCookies)
+	sessionID := h.extractSessionID(r)
+	cachedCookieJar, err := h.c.cachedCookieJar(sessionID)
+	if err != nil {
+		// There is a session cookie but we could not fetch the corresponding cookie jar.
+		//
+		// This should not happen and represents an internal error in the session handling logic.
+		log.Printf("Failure reading the cookie jar for session %q: %v", sessionID, err)
+		http.Error(w, fmt.Sprintf("Internal error reading the session %q", sessionID), http.StatusInternalServerError)
+		return
+	}
+	cachedCookies := cachedCookieJar.Cookies(&urlForCookies)
+	h.restoreSession(r, cachedCookies)
 	w = &sessionResponseWriter{
-		cj:            h.cj,
+		c:             h.c,
 		sessionID:     sessionID,
 		urlForCookies: &urlForCookies,
 		wrapped:       w,
@@ -86,7 +148,7 @@ func (cj *Cache) SessionHandler(wrapped http.Handler) http.Handler {
 		return wrapped
 	}
 	return &sessionHandler{
-		cj:      cj,
+		c:       cj,
 		wrapped: wrapped,
 	}
 }
@@ -135,82 +197,4 @@ func (cj *Cache) cachedCookieJar(sessionID string) (jar http.CookieJar, err erro
 		return nil, fmt.Errorf("Internal error; unexpected type for value (%+v) stored in the cookie jar cache", val)
 	}
 	return jar, nil
-}
-
-// interceptSession modifies the given ResponseWriter by removing any Set-Cookie headers
-// and instead adding those cookies to the corresponding session.
-//
-// If there is not already a session, and we have new cookies to save in the session, then
-// this method will create a new session, and set a session cookie for it.
-//
-// This is the inverse of extractAndRestoreSession.
-func (cj *Cache) interceptSession(sessionID string, w http.ResponseWriter, u *url.URL) error {
-	header := w.Header()
-	cookiesToAdd := (&http.Response{Header: header}).Cookies()
-	if len(cookiesToAdd) == 0 {
-		// There were no cookies to intercept
-		return nil
-	}
-
-	header.Del("Set-Cookie")
-	if sessionID == "" {
-		// No session was previously defined, so we need to create a new one
-		sessionID = uuid.New().String()
-		sessionCookie := &http.Cookie{
-			Name:     cj.sessionCookieName,
-			Value:    sessionID,
-			Path:     "/",
-			Secure:   !cj.disableSSLForTest,
-			HttpOnly: true,
-			Expires:  time.Now().Add(cj.sessionCookieTimeout),
-		}
-		header.Add("Set-Cookie", sessionCookie.String())
-	}
-
-	cookieJar, err := cj.cachedCookieJar(sessionID)
-	if err != nil {
-		log.Printf("Failure reading a cached cookie jar: %v", err)
-		return fmt.Errorf("Failure reading a cached cookie jar: %v", err)
-	}
-	cookieJar.SetCookies(u, cookiesToAdd)
-	return nil
-}
-
-// extractAndRestoreSession pulls the session ID cookie (if any) out of the given request,
-// finds the corresponding session, and then adds any saved cookies for that session to the request.
-//
-// The return value is the session ID, or an empty string if there is no session.
-//
-// This is the inverse of interceptSession.
-func (cj *Cache) extractAndRestoreSession(r *http.Request, u *url.URL) (sessionID string) {
-	sessionCookie, err := r.Cookie(cj.sessionCookieName)
-	if err != nil || sessionCookie == nil {
-		// There is no session cookie, so we have nothing to do.
-		return ""
-	}
-
-	sessionID = sessionCookie.Value
-	cachedCookieJar, err := cj.cachedCookieJar(sessionID)
-	if err != nil {
-		log.Printf("Failure reading the cookie jar for session %q: %v", sessionID, err)
-		// We are unable to fetch a cookie jar for the session, so we have no
-		// existing, cached cookies to insert into the request.
-		return ""
-	}
-
-	// Remove the session cookie
-	existingCookies := r.Cookies()
-	r.Header.Del("Cookie")
-	for _, c := range existingCookies {
-		if c.Name != cj.sessionCookieName {
-			r.AddCookie(c)
-		}
-	}
-
-	// Restore any cached cookies from the session
-	cachedCookies := cachedCookieJar.Cookies(u)
-	for _, c := range cachedCookies {
-		r.AddCookie(c)
-	}
-	return sessionID
 }
