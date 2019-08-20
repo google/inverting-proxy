@@ -19,9 +19,7 @@ package banner
 import (
 	"bytes"
 	"context"
-	"io"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strings"
 	"text/template"
@@ -49,11 +47,11 @@ func isHTMLRequest(r *http.Request) bool {
 	return strings.Contains(accept, "html")
 }
 
-func isHTMLResponse(resp *http.Response) bool {
-	if resp.StatusCode != http.StatusOK {
+func isHTMLResponse(statusCode int, responseHeader http.Header) bool {
+	if statusCode != http.StatusOK {
 		return false
 	}
-	contentType := resp.Header.Get(contentTypeHeader)
+	contentType := responseHeader.Get(contentTypeHeader)
 	return strings.Contains(contentType, "html")
 }
 
@@ -67,15 +65,53 @@ func isAlreadyFramed(r *http.Request) bool {
 	return false
 }
 
-func copyRecordedResponse(w http.ResponseWriter, resp *http.Response) {
-	for name, vals := range resp.Header {
-		for _, val := range vals {
-			w.Header().Add(name, val)
-		}
+type bannerResponseWriter struct {
+	wrapped    http.ResponseWriter
+	bannerHTML string
+	targetURL  *url.URL
+
+	wroteHeader bool
+	writeBytes  bool
+}
+
+func (w *bannerResponseWriter) Header() http.Header {
+	return w.wrapped.Header()
+}
+
+func (w *bannerResponseWriter) WriteHeader(statusCode int) {
+	if w.wroteHeader {
+		return
 	}
-	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
-	resp.Body.Close()
+	w.wroteHeader = true
+	w.wrapped.WriteHeader(statusCode)
+	if !isHTMLResponse(statusCode, w.Header()) {
+		w.writeBytes = true
+		return
+	}
+
+	var templateBuf bytes.Buffer
+	templateVals := &struct {
+		TargetURL string
+		Banner    string
+	}{
+		TargetURL: w.targetURL.String(),
+		Banner:    w.bannerHTML,
+	}
+	if err := frameWrapperTmpl.Execute(&templateBuf, templateVals); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.wrapped.Write(templateBuf.Bytes())
+}
+
+func (w *bannerResponseWriter) Write(bs []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	if !w.writeBytes {
+		return len(bs), nil
+	}
+	return w.wrapped.Write(bs)
 }
 
 // Proxy builds an HTTP handler that proxies to a wrapped handler but injects the given HTML banner into every HTML response.
@@ -91,27 +127,12 @@ func Proxy(ctx context.Context, wrapped http.Handler, bannerHTML string) (http.H
 			wrapped.ServeHTTP(w, r)
 			return
 		}
-		responseRecorder := httptest.NewRecorder()
-		wrapped.ServeHTTP(responseRecorder, r)
-		result := responseRecorder.Result()
-		if !isHTMLResponse(result) {
-			copyRecordedResponse(w, result)
-			return
+		w = &bannerResponseWriter{
+			wrapped:    w,
+			bannerHTML: bannerHTML,
+			targetURL:  r.URL,
 		}
-
-		var templateBuf bytes.Buffer
-		templateVals := &struct {
-			TargetURL string
-			Banner    string
-		}{
-			TargetURL: r.URL.String(),
-			Banner:    bannerHTML,
-		}
-		if err := frameWrapperTmpl.Execute(&templateBuf, templateVals); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.Write(templateBuf.Bytes())
+		wrapped.ServeHTTP(w, r)
 	})
 	return mux, nil
 }

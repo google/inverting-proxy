@@ -124,7 +124,7 @@ func TestIsHTMLResponse(t *testing.T) {
 	}
 
 	for _, testCase := range testCases {
-		if got, want := isHTMLResponse(testCase.resp), testCase.want; got != want {
+		if got, want := isHTMLResponse(testCase.resp.StatusCode, testCase.resp.Header), testCase.want; got != want {
 			t.Errorf("isHTMLResponse(%+v): got %v, want %v", testCase.resp, got, want)
 		}
 	}
