@@ -40,11 +40,17 @@ const (
 var frameWrapperTmpl = template.Must(template.New("frame-wrapper").Parse(frameWrapperTemplate))
 
 func isHTMLRequest(r *http.Request) bool {
+	// We want to err on the side of not injecting a banner in case that might
+	// interfere with the semantics of the app. Since we can't know the expected
+	// semantics for the response to a POST reqest, we play it safe and only
+	// inject the banner in responses to GET requests.
 	if r.Method != http.MethodGet {
 		return false
 	}
 	accept := r.Header.Get(acceptHeader)
-	return strings.Contains(accept, "html")
+	// Our injected response will be HTML, so we don't want to inject it unless
+	// the client explicitly stated it will accept HTML responses.
+	return strings.Contains(accept, "text/html")
 }
 
 func isHTMLResponse(statusCode int, responseHeader http.Header) bool {
@@ -52,7 +58,7 @@ func isHTMLResponse(statusCode int, responseHeader http.Header) bool {
 		return false
 	}
 	contentType := responseHeader.Get(contentTypeHeader)
-	return strings.Contains(contentType, "html")
+	return strings.Contains(contentType, "text/html") || strings.Contains(contentType, "application/xhtml+xml")
 }
 
 func isAlreadyFramed(r *http.Request) bool {

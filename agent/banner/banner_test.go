@@ -56,7 +56,7 @@ func TestIsHTMLRequest(t *testing.T) {
 					"Accept": []string{"text/xhtml"},
 				},
 			},
-			want: true,
+			want: false,
 		},
 		{
 			req: &http.Request{
@@ -107,7 +107,7 @@ func TestIsHTMLResponse(t *testing.T) {
 			resp: &http.Response{
 				StatusCode: http.StatusOK,
 				Header: http.Header{
-					"Content-Type": []string{"text/xhtml"},
+					"Content-Type": []string{"application/xhtml+xml"},
 				},
 			},
 			want: true,
