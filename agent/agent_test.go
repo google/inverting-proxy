@@ -151,7 +151,8 @@ func TestWithInMemoryProxyAndBackend(t *testing.T) {
 		"--debug=true",
 		"--backend=testBackend",
 		"--proxy", proxyURL+"/",
-		"--host=localhost:"+backendURL.Port()),
+		"--host=localhost:"+backendURL.Port(),
+		"--inject-banner=\\<div\\>FOO\\</div\\>"),
 		" ")
 	agentCmd := exec.CommandContext(ctx, "/bin/bash", "-c", args)
 
