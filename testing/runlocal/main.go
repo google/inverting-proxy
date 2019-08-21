@@ -185,7 +185,8 @@ func main() {
 		"--backend=testBackend",
 		"--proxy", proxyURL+"/",
 		"--host=localhost:"+backendURL.Port(),
-	), " ")
+		"--inject-banner=\\<div\\ style=\"width:100%;color:white;background-color:#1a73e8;height:24;font-size:20;padding:8px\"\\>Inverting\\ Proxy\\</div\\>"),
+		" ")
 	agentCmd := exec.CommandContext(ctx, "/bin/bash", "-c", args)
 	agentCmd.Stdout = os.Stdout
 	agentCmd.Stderr = os.Stderr

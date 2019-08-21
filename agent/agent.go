@@ -27,6 +27,7 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -37,10 +38,10 @@ import (
 	"time"
 
 	"github.com/golang/groupcache/lru"
-	"golang.org/x/net/context"
 	"golang.org/x/oauth2/google"
 	compute "google.golang.org/api/compute/v1"
 
+	"github.com/google/inverting-proxy/agent/banner"
 	"github.com/google/inverting-proxy/agent/sessions"
 	"github.com/google/inverting-proxy/agent/utils"
 	"github.com/google/inverting-proxy/agent/websockets"
@@ -59,6 +60,7 @@ var (
 	debug                = flag.Bool("debug", false, "Whether or not to print debug log messages")
 	disableSSLForTest    = flag.Bool("disable-ssl-for-test", false, "Disable requirements for SSL when running tests locally")
 	forwardUserID        = flag.Bool("forward-user-id", false, "Whether or not to include the ID (email address) of the end user in requests to the backend")
+	injectBanner         = flag.String("inject-banner", "", "HTML snippet to inject in served webpages")
 	shimWebsockets       = flag.Bool("shim-websockets", false, "Whether or not to replace websockets with a shim")
 	shimPath             = flag.String("shim-path", "", "Path under which to handle websocket shim requests")
 	healthCheckPath      = flag.String("health-check-path", "/", "Path on backend host to issue health checks against.  Defaults to the root.")
@@ -87,7 +89,10 @@ func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) 
 		}
 	}
 	h = sessionLRU.SessionHandler(h)
-	return h, nil
+	if *injectBanner == "" {
+		return h, nil
+	}
+	return banner.Proxy(ctx, h, *injectBanner)
 }
 
 // forwardRequest forwards the given request from the proxy to
