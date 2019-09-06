@@ -159,7 +159,7 @@ curl -H "Authorization: Bearer $(gcloud auth print-access-token)" \
 
 ... where "${BACKEND_RECORD}" is a JSON object with the following fields:
 
-* id: An arbitary name for the backend
+* id: An arbitrary name for the backend
 * endUser: The email address of the end user connecting to that backend.
   The email address must be for a Google account.
   Alternatively, you can use the special string "allUsers" to make your server public.
