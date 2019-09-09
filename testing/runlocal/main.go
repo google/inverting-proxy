@@ -42,11 +42,13 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const responseTemplate = `<html>
   <head><title>Proxied response from {{.Path}}</title></head>
-  <body>Received a request to {{.Path}}</body>
+  <body>Received a request to {{.Path}} with backend cookie {{.BackendCookie}}</body>
 </html>
 `
 
@@ -124,14 +126,29 @@ func main() {
 		}
 	}))
 
+	backendCookieName := "BackendCookie"
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Responding to backend request to %q", r.URL.Path)
+		bc, err := r.Cookie(backendCookieName)
+		if err == http.ErrNoCookie || bc == nil {
+			backendCookieVal := uuid.New().String()
+			bc = &http.Cookie{
+				Name:     backendCookieName,
+				Value:    backendCookieVal,
+				HttpOnly: true,
+			}
+			http.SetCookie(w, bc)
+			http.Redirect(w, r, r.URL.String(), http.StatusTemporaryRedirect)
+			return
+		}
 
 		var templateBuf bytes.Buffer
 		templateVals := &struct {
-			Path string
+			Path          string
+			BackendCookie string
 		}{
-			Path: r.URL.Path,
+			Path:          r.URL.Path,
+			BackendCookie: bc.Value,
 		}
 		if err := respTmpl.Execute(&templateBuf, templateVals); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -163,6 +180,8 @@ func main() {
 	args := strings.Join(append(
 		[]string{"${GOPATH}/bin/proxy-forwarding-agent"},
 		"--debug=true",
+		"--disable-ssl-for-test=true",
+		"--session-cookie-name=SessionID",
 		"--backend=testBackend",
 		"--proxy", proxyURL+"/",
 		"--host=localhost:"+backendURL.Port(),

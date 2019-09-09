@@ -42,6 +42,7 @@ import (
 	compute "google.golang.org/api/compute/v1"
 
 	"github.com/google/inverting-proxy/agent/banner"
+	"github.com/google/inverting-proxy/agent/sessions"
 	"github.com/google/inverting-proxy/agent/utils"
 	"github.com/google/inverting-proxy/agent/websockets"
 )
@@ -57,6 +58,7 @@ var (
 	host                 = flag.String("host", "localhost:8080", "Hostname (including port) of the backend server")
 	backendID            = flag.String("backend", "", "Unique ID for this backend.")
 	debug                = flag.Bool("debug", false, "Whether or not to print debug log messages")
+	disableSSLForTest    = flag.Bool("disable-ssl-for-test", false, "Disable requirements for SSL when running tests locally")
 	forwardUserID        = flag.Bool("forward-user-id", false, "Whether or not to include the ID (email address) of the end user in requests to the backend")
 	injectBanner         = flag.String("inject-banner", "", "HTML snippet to inject in served webpages")
 	shimWebsockets       = flag.Bool("shim-websockets", false, "Whether or not to replace websockets with a shim")
@@ -64,6 +66,12 @@ var (
 	healthCheckPath      = flag.String("health-check-path", "/", "Path on backend host to issue health checks against.  Defaults to the root.")
 	healthCheckFreq      = flag.Int("health-check-interval-seconds", 0, "Wait time in seconds between health checks.  Set to zero to disable health checks.  Checks disabled by default.")
 	healthCheckUnhealthy = flag.Int("health-check-unhealthy-threshold", 2, "A so-far healthy backend will be marked unhealthy after this many consecutive failures. The minimum value is 1.")
+
+	sessionCookieName       = flag.String("session-cookie-name", "", "Name of the session cookie; an empty value disables agent-based session tracking")
+	sessionCookieTimeout    = flag.Duration("session-cookie-timeout", 12*time.Hour, "Expiration flag for the session cookie")
+	sessionCookieCacheLimit = flag.Int("session-cookie-cache-limit", 1000, "Upper bound on the number of concurrent sessions that can be tracked by the agent")
+
+	sessionLRU *sessions.Cache
 )
 
 func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) (http.Handler, error) {
@@ -72,18 +80,19 @@ func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) 
 		Host:   host,
 	})
 	hostProxy.FlushInterval = 100 * time.Millisecond
-	var wrappedProxy http.Handler = hostProxy
+	var h http.Handler = hostProxy
 	if shimPath != "" {
 		var err error
-		wrappedProxy, err = websockets.Proxy(ctx, hostProxy, host, shimPath, injectShimCode)
+		h, err = websockets.Proxy(ctx, hostProxy, host, shimPath, injectShimCode)
 		if err != nil {
 			return nil, err
 		}
 	}
+	h = sessionLRU.SessionHandler(h)
 	if *injectBanner == "" {
-		return wrappedProxy, nil
+		return h, nil
 	}
-	return banner.Proxy(ctx, wrappedProxy, *injectBanner)
+	return banner.Proxy(ctx, h, *injectBanner)
 }
 
 // forwardRequest forwards the given request from the proxy to
@@ -248,6 +257,9 @@ func main() {
 	}
 	if !strings.HasPrefix(*healthCheckPath, "/") {
 		*healthCheckPath = "/" + *healthCheckPath
+	}
+	if *sessionCookieName != "" {
+		sessionLRU = sessions.NewCache(*sessionCookieName, *sessionCookieTimeout, *sessionCookieCacheLimit, *disableSSLForTest)
 	}
 
 	waitForHealthy()
