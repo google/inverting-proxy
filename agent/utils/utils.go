@@ -187,8 +187,8 @@ func (t *vmTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 // This method relies on the Google Compute Engine functionality for verifying a VM's identity
 // (https://cloud.google.com/compute/docs/instances/verifying-instance-identity), so it if this
 // is not running inside of a Google Compute Engine VM, then it just returns the passed in RoundTripper.
-func RoundTripperWithVMIdentity(ctx context.Context, wrapped http.RoundTripper, proxyURL string) http.RoundTripper {
-	if !hasVMServiceAccount() {
+func RoundTripperWithVMIdentity(ctx context.Context, wrapped http.RoundTripper, proxyURL string, disableGCEVM bool) http.RoundTripper {
+	if !hasVMServiceAccount() || disableGCEVM {
 		return wrapped
 	}
 
