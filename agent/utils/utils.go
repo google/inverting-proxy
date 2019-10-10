@@ -215,19 +215,31 @@ func RoundTripperWithVMIdentity(ctx context.Context, wrapped http.RoundTripper, 
 }
 
 // ListPendingRequests issues a single request to the proxy to ask for the IDs of pending requests.
-func ListPendingRequests(client *http.Client, proxyHost, backendID string) ([]string, error) {
+func ListPendingRequests(client *http.Client, proxyHost, backendID string, cookie *http.Cookie) ([]string, *http.Cookie, error) {
 	proxyURL := proxyHost + PendingPath
 	proxyReq, err := http.NewRequest(http.MethodGet, proxyURL, nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	proxyReq.Header.Add(HeaderBackendID, backendID)
+	if cookie != nil {
+		proxyReq.AddCookie(cookie)
+	}
 	proxyResp, err := client.Do(proxyReq)
 	if err != nil {
-		return nil, fmt.Errorf("A proxy request failed: %q", err.Error())
+		return nil, nil, fmt.Errorf("A proxy request failed: %q", err.Error())
 	}
 	defer proxyResp.Body.Close()
-	return parseRequestIDs(proxyResp)
+	if cookies := proxyResp.Cookies(); len(cookies) > 0 {
+		for _, c := range cookies {
+			if c.Name == "S" {
+				cookie = c
+			}
+		}
+	}
+	ids, err := parseRequestIDs(proxyResp)
+	return ids, cookie, err
+
 }
 
 func parseRequestFromProxyResponse(backendID, requestID string, proxyResp *http.Response) (*ForwardedRequest, error) {
@@ -259,7 +271,7 @@ func parseRequestFromProxyResponse(backendID, requestID string, proxyResp *http.
 // ReadRequest reads a forwarded client request from the inverting proxy.
 //
 // If the returned request is non-nil, then it is passed to the provided callback.
-func ReadRequest(client *http.Client, proxyHost, backendID, requestID string, callback RequestCallback) error {
+func ReadRequest(client *http.Client, proxyHost, backendID, requestID string, callback RequestCallback, cookie *http.Cookie) error {
 	proxyURL := proxyHost + RequestPath
 	proxyReq, err := http.NewRequest(http.MethodGet, proxyURL, nil)
 	if err != nil {
@@ -267,6 +279,9 @@ func ReadRequest(client *http.Client, proxyHost, backendID, requestID string, ca
 	}
 	proxyReq.Header.Add(HeaderBackendID, backendID)
 	proxyReq.Header.Add(HeaderRequestID, requestID)
+	if cookie != nil {
+		proxyReq.AddCookie(cookie)
+	}
 	proxyResp, err := client.Do(proxyReq)
 	if err != nil {
 		return fmt.Errorf("A proxy request failed: %q", err.Error())
@@ -325,13 +340,13 @@ type ResponseForwarder struct {
 
 // NewResponseForwarder constructs a new ResponseForwarder that forwards to the
 // given proxy for the specified request.
-func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID string) (*ResponseForwarder, error) {
+func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID string, cookie *http.Cookie) (*ResponseForwarder, error) {
 	// The contortions below support streaming.
 	//
 	// There are two pipes:
 	// 1. proxyReader, proxyWriter: The io.PipeWriter for the HTTP POST to the inverting proxy.
 	//       To this pipe, we write the full HTTP response from the backend target in HTTP
-	//       wire-format form. (Status + Headers + Body + Trailers)
+	//       wire-format form. (Status + Headers + Body + Trailers)z
 	//
 	// 2. responseBodyReader, responseBodyWriter: This pipe corresponds to the response body
 	//       from the backend target. To this pipe, we stream each read from backend target.
@@ -347,6 +362,9 @@ func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID s
 	proxyReq.Header.Set(HeaderBackendID, backendID)
 	proxyReq.Header.Set(HeaderRequestID, requestID)
 	proxyReq.Header.Set("Content-Type", "text/plain")
+	if cookie != nil {
+		proxyReq.AddCookie(cookie)
+	}
 
 	proxyClientErrChan := make(chan error, 100)
 	forwardingErrChan := make(chan error, 100)

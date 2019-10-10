@@ -72,6 +72,8 @@ var (
 	sessionCookieCacheLimit = flag.Int("session-cookie-cache-limit", 1000, "Upper bound on the number of concurrent sessions that can be tracked by the agent")
 
 	sessionLRU *sessions.Cache
+
+	stickyCookie *http.Cookie
 )
 
 func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) (http.Handler, error) {
@@ -102,7 +104,7 @@ func forwardRequest(client *http.Client, hostProxy http.Handler, request *utils.
 	if *forwardUserID {
 		httpRequest.Header.Add(utils.HeaderUserID, request.User)
 	}
-	responseForwarder, err := utils.NewResponseForwarder(client, *proxy, request.BackendID, request.RequestID)
+	responseForwarder, err := utils.NewResponseForwarder(client, *proxy, request.BackendID, request.RequestID, stickyCookie)
 	if err != nil {
 		return fmt.Errorf("failed to create the response forwarder: %v", err)
 	}
@@ -140,7 +142,7 @@ func processOneRequest(client *http.Client, hostProxy http.Handler, backendID st
 		}
 		return nil
 	}
-	if err := utils.ReadRequest(client, *proxy, backendID, requestID, requestForwarder); err != nil {
+	if err := utils.ReadRequest(client, *proxy, backendID, requestID, requestForwarder, stickyCookie); err != nil {
 		log.Printf("Failed to forward a request: [%s] %q\n", requestID, err.Error())
 	}
 }
@@ -151,11 +153,12 @@ func pollForNewRequests(client *http.Client, hostProxy http.Handler, backendID s
 	previouslySeenRequests := lru.New(requestCacheLimit)
 	var retryCount uint
 	for {
-		if requests, err := utils.ListPendingRequests(client, *proxy, backendID); err != nil {
+		if requests, cookie, err := utils.ListPendingRequests(client, *proxy, backendID, stickyCookie); err != nil {
 			log.Printf("Failed to read pending requests: %q\n", err.Error())
 			time.Sleep(utils.ExponentialBackoffDuration(retryCount))
 			retryCount++
 		} else {
+			stickyCookie = cookie
 			retryCount = 0
 			for _, requestID := range requests {
 				if _, ok := previouslySeenRequests.Get(requestID); !ok {
