@@ -31,6 +31,7 @@ RUN wget -O /opt/go1.11.1.linux-amd64.tar.gz \
     export GOPATH=/opt/ && \
     go get github.com/golang/groupcache/lru && \
     go get golang.org/x/net/context && \
+    go get golang.org/x/net/publicsuffix && \
     go get golang.org/x/oauth2/google && \
     go get google.golang.org/api/compute/v1 && \
     go build -o ${GOPATH}/bin/proxy-forwarding-agent /opt/src/github.com/google/inverting-proxy/agent/agent.go && \

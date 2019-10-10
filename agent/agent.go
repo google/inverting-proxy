@@ -32,12 +32,14 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httputil"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/golang/groupcache/lru"
+	"golang.org/x/net/publicsuffix"
 	"golang.org/x/oauth2/google"
 	compute "google.golang.org/api/compute/v1"
 
@@ -66,7 +68,7 @@ var (
 	healthCheckPath      = flag.String("health-check-path", "/", "Path on backend host to issue health checks against.  Defaults to the root.")
 	healthCheckFreq      = flag.Int("health-check-interval-seconds", 0, "Wait time in seconds between health checks.  Set to zero to disable health checks.  Checks disabled by default.")
 	healthCheckUnhealthy = flag.Int("health-check-unhealthy-threshold", 2, "A so-far healthy backend will be marked unhealthy after this many consecutive failures. The minimum value is 1.")
-        disableGCEVM         = flag.Bool("disable-gce-vm-header", false, "Disable the agent from adding a GCE VM header.")
+	disableGCEVM         = flag.Bool("disable-gce-vm-header", false, "Disable the agent from adding a GCE VM header.")
 
 	sessionCookieName       = flag.String("session-cookie-name", "", "Name of the session cookie; an empty value disables agent-based session tracking")
 	sessionCookieTimeout    = flag.Duration("session-cookie-timeout", 12*time.Hour, "Expiration flag for the session cookie")
@@ -179,6 +181,12 @@ func getGoogleClient(ctx context.Context) (*http.Client, error) {
 		return nil, err
 	}
 	client.Transport = utils.RoundTripperWithVMIdentity(ctx, client.Transport, *proxy, *disableGCEVM)
+	client.Jar, err = cookiejar.New(&cookiejar.Options{
+		PublicSuffixList: publicsuffix.List,
+	})
+	if err != nil {
+		return nil, err
+	}
 	return client, nil
 }
 
