@@ -256,17 +256,17 @@ func createShimChannel(ctx context.Context, host, shimPath string) http.Handler 
 		}
 		targetURL.Scheme = "ws"
 		targetURL.Host = host
-		conn, err := NewConnection(ctx, targetURL.String(),
+		conn, err := NewConnection(ctx, targetURL.String(), r.Header,
 			func(err error) {
 				log.Printf("Websocket failure: %v", err)
 			})
 		if err != nil {
-			log.Printf("Failed to dial the websocket server %q: %v\n", targetURL.String(), err)
+			log.Printf("Failed to dial the websocket server %q: %v\n", targetURL, err)
 			http.Error(w, fmt.Sprintf("internal error opening a shim connection: %v", err), http.StatusInternalServerError)
 			return
 		}
 		connections.Store(sessionID, conn)
-		log.Printf("Websocket connection to the server %q established for session: %v\n", targetURL.String(), sessionID)
+		log.Printf("Websocket connection to the server %q established for session: %v\n", targetURL, sessionID)
 		resp := &sessionMessage{
 			ID:      sessionID,
 			Message: targetURL.String(),
