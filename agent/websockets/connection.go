@@ -18,7 +18,7 @@ package websockets
 
 import (
 	"fmt"
-	"log"
+	"net/http"
 	"sync"
 	"time"
 
@@ -38,12 +38,34 @@ type Connection struct {
 	serverMessages chan string
 }
 
+// This map defines the set of headers that should be stripped from the WS request, as they
+// are being verified by the websocket.Client.
+var stripHeaderNames = map[string]bool{
+	"Upgrade":                  true,
+	"Connection":               true,
+	"Sec-Websocket-Key":        true,
+	"Sec-Websocket-Version":    true,
+	"Sec-Websocket-Extensions": true,
+	"Sec-Websocket-Protocol":   true,
+}
+
+// stripWSHeader strips request headers that are not allowed by the websocket.Client library,
+// while preserving the rest.
+func stripWSHeader(header http.Header) http.Header {
+	result := http.Header{}
+	for k, v := range header {
+		if !stripHeaderNames[k] {
+			result[k] = v
+		}
+	}
+	return result
+}
+
 // NewConnection creates and returns a new Connection.
-func NewConnection(ctx context.Context, targetURL string, errCallback func(err error)) (*Connection, error) {
+func NewConnection(ctx context.Context, targetURL string, header http.Header, errCallback func(err error)) (*Connection, error) {
 	ctx, cancel := context.WithCancel(ctx)
-	serverConn, _, err := websocket.DefaultDialer.Dial(targetURL, nil)
+	serverConn, _, err := websocket.DefaultDialer.Dial(targetURL, stripWSHeader(header))
 	if err != nil {
-		log.Printf("Failed to dial the websocket server %q: %v\n", targetURL, err)
 		cancel()
 		return nil, err
 	}
