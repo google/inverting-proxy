@@ -53,11 +53,9 @@ var stripHeaderNames = map[string]bool{
 // while preserving the rest.
 func stripWSHeader(header http.Header) http.Header {
 	result := http.Header{}
-	for k, vals := range header {
+	for k, v := range header {
 		if !stripHeaderNames[k] {
-			for _, v := range vals {
-				result.Add(k, v)
-			}
+			result[k] = v
 		}
 	}
 	return result
