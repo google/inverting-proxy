@@ -27,12 +27,18 @@ import (
 
 const (
 	acceptHeader         = "Accept"
+	cacheControlHeader   = "Cache-Control"
 	contentTypeHeader    = "Content-Type"
 	refererHeader        = "Referer"
 	frameWrapperTemplate = `<html>
+  <head>
+    <meta http-equiv="cache-control" content="no-cache" />
+  </head>
   <body style="margin:0px">
-    {{.Banner}}
-    <iframe height="100%" width="100%" style="border:0px" src="{{.TargetURL}}"></iframe>
+    <div height="{{.BannerHeight}}">
+      {{.Banner}}
+    </div>
+    <iframe width="100%" style="border:0px;height: calc(100% - {{.BannerHeight}})" src="{{.TargetURL}}"></iframe>
   </body>
 </html>`
 )
@@ -72,9 +78,10 @@ func isAlreadyFramed(r *http.Request) bool {
 }
 
 type bannerResponseWriter struct {
-	wrapped    http.ResponseWriter
-	bannerHTML string
-	targetURL  *url.URL
+	wrapped      http.ResponseWriter
+	bannerHTML   string
+	bannerHeight string
+	targetURL    *url.URL
 
 	wroteHeader bool
 	writeBytes  bool
@@ -89,24 +96,28 @@ func (w *bannerResponseWriter) WriteHeader(statusCode int) {
 		return
 	}
 	w.wroteHeader = true
-	w.wrapped.WriteHeader(statusCode)
 	if !isHTMLResponse(statusCode, w.Header()) {
+		w.wrapped.WriteHeader(statusCode)
 		w.writeBytes = true
 		return
 	}
 
 	var templateBuf bytes.Buffer
 	templateVals := &struct {
-		TargetURL string
-		Banner    string
+		TargetURL    string
+		Banner       string
+		BannerHeight string
 	}{
-		TargetURL: w.targetURL.String(),
-		Banner:    w.bannerHTML,
+		TargetURL:    w.targetURL.String(),
+		Banner:       w.bannerHTML,
+		BannerHeight: w.bannerHeight,
 	}
 	if err := frameWrapperTmpl.Execute(&templateBuf, templateVals); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	w.Header().Add(cacheControlHeader, "no-cache")
+	w.wrapped.WriteHeader(statusCode)
 	w.wrapped.Write(templateBuf.Bytes())
 }
 
@@ -121,7 +132,7 @@ func (w *bannerResponseWriter) Write(bs []byte) (int, error) {
 }
 
 // Proxy builds an HTTP handler that proxies to a wrapped handler but injects the given HTML banner into every HTML response.
-func Proxy(ctx context.Context, wrapped http.Handler, bannerHTML string) (http.Handler, error) {
+func Proxy(ctx context.Context, wrapped http.Handler, bannerHTML, bannerHeight string) (http.Handler, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if !isHTMLRequest(r) {
@@ -134,9 +145,10 @@ func Proxy(ctx context.Context, wrapped http.Handler, bannerHTML string) (http.H
 			return
 		}
 		w = &bannerResponseWriter{
-			wrapped:    w,
-			bannerHTML: bannerHTML,
-			targetURL:  r.URL,
+			wrapped:      w,
+			bannerHTML:   bannerHTML,
+			bannerHeight: bannerHeight,
+			targetURL:    r.URL,
 		}
 		wrapped.ServeHTTP(w, r)
 	})
