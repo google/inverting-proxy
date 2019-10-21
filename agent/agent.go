@@ -63,6 +63,7 @@ var (
 	disableSSLForTest    = flag.Bool("disable-ssl-for-test", false, "Disable requirements for SSL when running tests locally")
 	forwardUserID        = flag.Bool("forward-user-id", false, "Whether or not to include the ID (email address) of the end user in requests to the backend")
 	injectBanner         = flag.String("inject-banner", "", "HTML snippet to inject in served webpages")
+	bannerHeight         = flag.String("banner-height", "40px", "Height of the injected banner. This is ignored if no banner is set.")
 	shimWebsockets       = flag.Bool("shim-websockets", false, "Whether or not to replace websockets with a shim")
 	shimPath             = flag.String("shim-path", "", "Path under which to handle websocket shim requests")
 	healthCheckPath      = flag.String("health-check-path", "/", "Path on backend host to issue health checks against.  Defaults to the root.")
@@ -95,7 +96,7 @@ func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) 
 	if *injectBanner == "" {
 		return h, nil
 	}
-	return banner.Proxy(ctx, h, *injectBanner)
+	return banner.Proxy(ctx, h, *injectBanner, *bannerHeight)
 }
 
 // forwardRequest forwards the given request from the proxy to
