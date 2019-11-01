@@ -23,13 +23,18 @@ import (
 	"net/url"
 	"strings"
 	"text/template"
+	"time"
 )
 
 const (
-	acceptHeader         = "Accept"
-	cacheControlHeader   = "Cache-Control"
-	contentTypeHeader    = "Content-Type"
-	refererHeader        = "Referer"
+	acceptHeader       = "Accept"
+	cacheControlHeader = "Cache-Control"
+	contentTypeHeader  = "Content-Type"
+	dateHeader         = "Date"
+	expiresHeader      = "Expires"
+	refererHeader      = "Referer"
+	pragmaHeader       = "Pragma"
+
 	frameWrapperTemplate = `<html>
   <head>
     <meta http-equiv="cache-control" content="no-cache" />
@@ -91,6 +96,13 @@ func (w *bannerResponseWriter) Header() http.Header {
 	return w.wrapped.Header()
 }
 
+func setNotCacheable(h http.Header) {
+	h.Set(cacheControlHeader, "no-cache, no-store, max-age=0, must-revalidate")
+	h.Set(dateHeader, time.Now().UTC().Format(http.TimeFormat))
+	h.Set(expiresHeader, time.Time{}.UTC().Format(http.TimeFormat))
+	h.Set(pragmaHeader, "no-cache")
+}
+
 func (w *bannerResponseWriter) WriteHeader(statusCode int) {
 	if w.wroteHeader {
 		return
@@ -116,7 +128,7 @@ func (w *bannerResponseWriter) WriteHeader(statusCode int) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Add(cacheControlHeader, "no-cache")
+	setNotCacheable(w.Header())
 	w.wrapped.WriteHeader(statusCode)
 	w.wrapped.Write(templateBuf.Bytes())
 }
@@ -140,7 +152,9 @@ func Proxy(ctx context.Context, wrapped http.Handler, bannerHTML, bannerHeight s
 			return
 		}
 		if isAlreadyFramed(r) {
-			// The page is already framed
+			// The page is already framed, so we want to forward it to the wrapped handler.
+			// However, we also want to disable caching so that the page is re-framed if reloaded.
+			setNotCacheable(w.Header())
 			wrapped.ServeHTTP(w, r)
 			return
 		}
