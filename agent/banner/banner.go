@@ -34,6 +34,7 @@ const (
 	expiresHeader      = "Expires"
 	refererHeader      = "Referer"
 	pragmaHeader       = "Pragma"
+	secFetchModeHeader = "Sec-Fetch-Mode"
 
 	frameWrapperTemplate = `<html>
   <head>
@@ -73,6 +74,10 @@ func isHTMLResponse(statusCode int, responseHeader http.Header) bool {
 }
 
 func isAlreadyFramed(r *http.Request) bool {
+	if r.Header.Get(secFetchModeHeader) == "nested-navigate" {
+		// If the browser told us the page is already framed, then believe it.
+		return true
+	}
 	if referer := r.Header.Get(refererHeader); referer != "" {
 		refererURL, err := url.Parse(referer)
 		if err == nil && refererURL.Host == r.Host && refererURL.Path == r.URL.Path {
