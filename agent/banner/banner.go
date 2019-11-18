@@ -27,14 +27,15 @@ import (
 )
 
 const (
-	acceptHeader       = "Accept"
-	cacheControlHeader = "Cache-Control"
-	contentTypeHeader  = "Content-Type"
-	dateHeader         = "Date"
-	expiresHeader      = "Expires"
-	refererHeader      = "Referer"
-	pragmaHeader       = "Pragma"
-	secFetchModeHeader = "Sec-Fetch-Mode"
+	acceptHeader        = "Accept"
+	cacheControlHeader  = "Cache-Control"
+	contentTypeHeader   = "Content-Type"
+	dateHeader          = "Date"
+	expiresHeader       = "Expires"
+	refererHeader       = "Referer"
+	pragmaHeader        = "Pragma"
+	secFetchModeHeader  = "Sec-Fetch-Mode"
+	xFrameOptionsHeader = "X-Frame-Options"
 
 	frameWrapperTemplate = `<html>
   <head>
@@ -93,8 +94,9 @@ type bannerResponseWriter struct {
 	bannerHeight string
 	targetURL    *url.URL
 
-	wroteHeader bool
-	writeBytes  bool
+	wroteHeader     bool
+	writeBytes      bool
+	isAlreadyFramed bool
 }
 
 func (w *bannerResponseWriter) Header() http.Header {
@@ -108,12 +110,24 @@ func setNotCacheable(h http.Header) {
 	h.Set(pragmaHeader, "no-cache")
 }
 
+func setXFrameOptionsSameOrigin(h http.Header) {
+	h.Del(xFrameOptionsHeader)
+	h.Set(xFrameOptionsHeader, "sameorigin")
+}
+
 func (w *bannerResponseWriter) WriteHeader(statusCode int) {
 	if w.wroteHeader {
 		return
 	}
 	w.wroteHeader = true
 	if !isHTMLResponse(statusCode, w.Header()) {
+		w.wrapped.WriteHeader(statusCode)
+		w.writeBytes = true
+		return
+	}
+	setNotCacheable(w.Header())
+	setXFrameOptionsSameOrigin(w.Header())
+	if w.isAlreadyFramed {
 		w.wrapped.WriteHeader(statusCode)
 		w.writeBytes = true
 		return
@@ -133,7 +147,6 @@ func (w *bannerResponseWriter) WriteHeader(statusCode int) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	setNotCacheable(w.Header())
 	w.wrapped.WriteHeader(statusCode)
 	w.wrapped.Write(templateBuf.Bytes())
 }
@@ -156,18 +169,12 @@ func Proxy(ctx context.Context, wrapped http.Handler, bannerHTML, bannerHeight s
 			wrapped.ServeHTTP(w, r)
 			return
 		}
-		if isAlreadyFramed(r) {
-			// The page is already framed, so we want to forward it to the wrapped handler.
-			// However, we also want to disable caching so that the page is re-framed if reloaded.
-			setNotCacheable(w.Header())
-			wrapped.ServeHTTP(w, r)
-			return
-		}
 		w = &bannerResponseWriter{
-			wrapped:      w,
-			bannerHTML:   bannerHTML,
-			bannerHeight: bannerHeight,
-			targetURL:    r.URL,
+			wrapped:         w,
+			bannerHTML:      bannerHTML,
+			bannerHeight:    bannerHeight,
+			targetURL:       r.URL,
+			isAlreadyFramed: isAlreadyFramed(r),
 		}
 		wrapped.ServeHTTP(w, r)
 	})
