@@ -33,6 +33,8 @@ import (
 	"text/template"
 
 	"context"
+
+	"github.com/gorilla/websocket"
 )
 
 const (
@@ -43,7 +45,7 @@ const (
     This file was served from behind a reverse proxy that does not support websockets.
 
     The following code snippet has been inserted by the proxy to replace websockets
-    with socket.io which is based on HTTP and will work with this proxy.
+    with HTTP requests that will work with this proxy.
 
     If this snippet insertion is causing issues, then contact the server administrator.
 -->
@@ -86,6 +88,9 @@ const (
         var msgs = JSON.parse(resp);
         if (self.onmessage) {
           msgs.forEach(function(msg) {
+            if (Array.isArray(msg)) {
+              msg = new Blob(msg);
+            }
             self.onmessage({ target: self, data: msg });
           });
         }
@@ -328,7 +333,7 @@ func createShimChannel(ctx context.Context, host, shimPath string) http.Handler 
 				http.Error(w, "internal error reading a shim session", http.StatusInternalServerError)
 				return
 			}
-			if err := conn.SendClientMessage(msg.Message); err != nil {
+			if err := conn.SendClientMessage(websocket.TextMessage, msg.Message); err != nil {
 				http.Error(w, fmt.Sprintf("attempt to send data on a closed session: %q", msg.ID), http.StatusBadRequest)
 				return
 			}
