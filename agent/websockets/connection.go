@@ -18,6 +18,7 @@ package websockets
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -168,15 +169,29 @@ func (conn *Connection) Close() {
 // SendClientMessage sends the given message to the websocket server.
 //
 // The returned error value is non-nill if the connection has been closed.
-func (conn *Connection) SendClientMessage(messageType int, msg string) error {
+func (conn *Connection) SendClientMessage(msg interface{}) error {
+	var clientMessage *message
+	if textMsg, ok := msg.(string); ok {
+		clientMessage = &message{
+			Type: websocket.TextMessage,
+			Data: []byte(textMsg),
+		}
+	} else if blobMsg, ok := msg.([]interface{}); ok && len(blobMsg) == 1 {
+		if blobText, ok := blobMsg[0].(string); ok {
+			clientMessage = &message{
+				Type: websocket.BinaryMessage,
+				Data: []byte(blobText),
+			}
+		}
+	} else {
+		log.Printf("unexpected websocket-shim message type: %+v\n", msg)
+		return fmt.Errorf("unexpected websocket-shim message type: %+v", msg)
+	}
 	select {
 	case <-conn.ctx.Done():
 		return fmt.Errorf("attempt to send a client message on a closed websocket connection")
 	default:
-		conn.clientMessages <- &message{
-			Type: messageType,
-			Data: []byte(msg),
-		}
+		conn.clientMessages <- clientMessage
 	}
 	return nil
 }

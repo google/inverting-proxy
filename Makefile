@@ -12,6 +12,7 @@ buildrunlocal: buildagent buildserver
 
 buildrunwebsockets: buildagent buildserver
 	go build -o ${GOPATH}/bin/inverting-proxy-run-websockets ./testing/websockets/main.go
+	go build -o ${GOPATH}/bin/example-websocket-server ./testing/websockets/example/main.go
 
 buildagent: vet
 	go build -o ${GOPATH}/bin/proxy-forwarding-agent ./agent/agent.go
