@@ -1,7 +1,7 @@
 build:	test
 	go build ./app
 
-test:	buildrunlocal
+test:	buildrunlocal buildrunwebsockets
 	go test ./agent/banner/...
 	go test ./agent/sessions/...
 	go test ./agent/utils/...
@@ -9,6 +9,10 @@ test:	buildrunlocal
 
 buildrunlocal: buildagent buildserver
 	go build -o ${GOPATH}/bin/inverting-proxy-run-local ./testing/runlocal/main.go
+
+buildrunwebsockets: buildagent buildserver
+	go build -o ${GOPATH}/bin/inverting-proxy-run-websockets ./testing/websockets/main.go
+	go build -o ${GOPATH}/bin/example-websocket-server ./testing/websockets/example/main.go
 
 buildagent: vet
 	go build -o ${GOPATH}/bin/proxy-forwarding-agent ./agent/agent.go

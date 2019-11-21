@@ -43,7 +43,7 @@ const (
     This file was served from behind a reverse proxy that does not support websockets.
 
     The following code snippet has been inserted by the proxy to replace websockets
-    with socket.io which is based on HTTP and will work with this proxy.
+    with HTTP requests that will work with this proxy.
 
     If this snippet insertion is causing issues, then contact the server administrator.
 -->
@@ -86,6 +86,9 @@ const (
         var msgs = JSON.parse(resp);
         if (self.onmessage) {
           msgs.forEach(function(msg) {
+            if (Array.isArray(msg)) {
+              msg = new Blob(msg);
+            }
             self.onmessage({ target: self, data: msg });
           });
         }
@@ -126,7 +129,37 @@ const (
       }
 
       self.pendingMessages = [];
-      self.pushing = false;
+      self.needsConversion = function(msg) {
+        if (typeof msg == 'string') {
+          return false;
+        }
+        if (Array.isArray(msg)) {
+          if (msg.length == 1) {
+            if (typeof msg[0] == 'string') {
+              return false;
+            }
+          }
+        }
+        return true;
+      }
+      self.convertMessagesAndPush = function(msgs) {
+        for (var i = 0; i < msgs.length; i++) {
+          if (self.needsConversion(msgs[i].msg)) {
+            var blob = new Blob([msgs[i].msg]);
+            var reader = new FileReader();
+            reader.addEventListener("loadend", function() {
+              msgs[i].msg = [reader.result];
+              self.convertMessagesAndPush(msgs);
+            });
+            reader.readAsText(blob);
+            return;
+          }
+        }
+        self.xhr('data', msgs, null, function() {
+          self.pushing = false;
+          self.push();
+        });
+      }
       self.push = function() {
          if (self.pushing) {
            return;
@@ -137,10 +170,7 @@ const (
          self.pushing = true;
          var msgs = self.pendingMessages;
          self.pendingMessages = [];
-         self.xhr('data', msgs, null, function() {
-           self.pushing = false;
-           self.push();
-         })
+         self.convertMessagesAndPush(msgs);
       }
 
       function poll() {
@@ -234,8 +264,8 @@ func shimBody(resp *http.Response, shimCode string) error {
 }
 
 type sessionMessage struct {
-	ID      string `json:"id,omitempty"`
-	Message string `json:"msg,omitempty"`
+	ID      string      `json:"id,omitempty"`
+	Message interface{} `json:"msg,omitempty"`
 }
 
 func createShimChannel(ctx context.Context, host, shimPath string) http.Handler {
@@ -256,6 +286,18 @@ func createShimChannel(ctx context.Context, host, shimPath string) http.Handler 
 		}
 		targetURL.Scheme = "ws"
 		targetURL.Host = host
+		if origin := r.Header.Get("Origin"); origin != "" {
+			originURL, err := url.Parse(origin)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("malformed origin in websocket request: %q", origin), http.StatusBadRequest)
+				return
+			}
+			if originURL.Host == r.Host {
+				// Rewrite the origin header so it matches the target URL.
+				originURL.Host = targetURL.Host
+				r.Header.Set("Origin", originURL.String())
+			}
+		}
 		conn, err := NewConnection(ctx, targetURL.String(), r.Header,
 			func(err error) {
 				log.Printf("Websocket failure: %v", err)
