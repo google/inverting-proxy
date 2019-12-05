@@ -45,7 +45,7 @@ const (
     <div height="{{.BannerHeight}}">
       {{.Banner}}
     </div>
-    <iframe width="100%" style="border:0px;height: calc(100% - {{.BannerHeight}})" src="{{.TargetURL}}"></iframe>
+    <iframe width="100%" id="inverting-proxy-frame" onLoad="window.history.replaceState(null, '', this.contentWindow.location)" style="border:0px;height: calc(100% - {{.BannerHeight}})" src="{{.TargetURL}}"></iframe>
   </body>
 </html>`
 )
