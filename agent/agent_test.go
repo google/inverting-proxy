@@ -281,6 +281,7 @@ func TestWithInMemoryProxyAndBackendWithSessions(t *testing.T) {
 		"--session-cookie-name="+sessionCookie,
 		"--disable-ssl-for-test=true",
 		"--inject-banner=\\<div\\>FOO\\</div\\>",
+		"--favicon-url=www.favicon.com/test.png",
 		"--host=localhost:"+parsedBackendURL.Port()),
 		" ")
 	agentCmd := exec.CommandContext(ctx, "/bin/bash", "-c", args)

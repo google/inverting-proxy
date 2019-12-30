@@ -40,6 +40,7 @@ const (
 	frameWrapperTemplate = `<html>
   <head>
     <meta http-equiv="cache-control" content="no-cache" />
+    {{.FavIconLink}}
   </head>
   <body style="margin:0px">
     <div height="{{.BannerHeight}}">
@@ -48,9 +49,11 @@ const (
     <iframe width="100%" id="inverting-proxy-frame" onLoad="window.history.replaceState(null, '', this.contentWindow.location)" style="border:0px;height: calc(100% - {{.BannerHeight}})" src="{{.TargetURL}}"></iframe>
   </body>
 </html>`
+	favIconLinkTemplate = `<link rel="icon" type="image/png" href="{{.FavIconURL}}">`
 )
 
 var frameWrapperTmpl = template.Must(template.New("frame-wrapper").Parse(frameWrapperTemplate))
+var favIconLinkTmpl = template.Must(template.New("fav-icon").Parse(favIconLinkTemplate))
 
 func isHTMLRequest(r *http.Request) bool {
 	// We want to err on the side of not injecting a banner in case that might
@@ -93,6 +96,7 @@ type bannerResponseWriter struct {
 	bannerHTML   string
 	bannerHeight string
 	targetURL    *url.URL
+	favIconURL   string
 
 	wroteHeader     bool
 	writeBytes      bool
@@ -115,6 +119,41 @@ func setXFrameOptionsSameOrigin(h http.Header) {
 	h.Set(xFrameOptionsHeader, "sameorigin")
 }
 
+func (w *bannerResponseWriter) getFavIconLink() (string, error) {
+	if w.favIconURL != "" {
+		return "", nil
+	}
+	var favIconLinkBuf bytes.Buffer
+	templateVals := &struct {
+		FavIconUrl string
+	}{
+		FavIconUrl: w.favIconURL,
+	}
+	if err := favIconLinkTmpl.Execute(&favIconLinkBuf, templateVals); err != nil {
+		return "", err
+	}
+	return favIconLinkBuf.String(), nil
+}
+
+func (w *bannerResponseWriter) getBanner(favIconLink string) ([]byte, error) {
+	var templateBuf bytes.Buffer
+	templateVals := &struct {
+		TargetURL    string
+		Banner       string
+		BannerHeight string
+		FavIconLink  string
+	}{
+		TargetURL:    w.targetURL.String(),
+		Banner:       w.bannerHTML,
+		BannerHeight: w.bannerHeight,
+		FavIconLink:  favIconLink,
+	}
+	if err := frameWrapperTmpl.Execute(&templateBuf, templateVals); err != nil {
+		return []byte{}, err
+	}
+	return templateBuf.Bytes(), nil
+}
+
 func (w *bannerResponseWriter) WriteHeader(statusCode int) {
 	if w.wroteHeader {
 		return
@@ -132,23 +171,19 @@ func (w *bannerResponseWriter) WriteHeader(statusCode int) {
 		w.writeBytes = true
 		return
 	}
-
-	var templateBuf bytes.Buffer
-	templateVals := &struct {
-		TargetURL    string
-		Banner       string
-		BannerHeight string
-	}{
-		TargetURL:    w.targetURL.String(),
-		Banner:       w.bannerHTML,
-		BannerHeight: w.bannerHeight,
-	}
-	if err := frameWrapperTmpl.Execute(&templateBuf, templateVals); err != nil {
+	favIconLink, err := w.getFavIconLink()
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	banner, e := w.getBanner(favIconLink)
+	if e != nil {
+		http.Error(w, e.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	w.wrapped.WriteHeader(statusCode)
-	w.wrapped.Write(templateBuf.Bytes())
+	w.wrapped.Write(banner)
 }
 
 func (w *bannerResponseWriter) Write(bs []byte) (int, error) {
@@ -162,7 +197,7 @@ func (w *bannerResponseWriter) Write(bs []byte) (int, error) {
 }
 
 // Proxy builds an HTTP handler that proxies to a wrapped handler but injects the given HTML banner into every HTML response.
-func Proxy(ctx context.Context, wrapped http.Handler, bannerHTML, bannerHeight string) (http.Handler, error) {
+func Proxy(ctx context.Context, wrapped http.Handler, bannerHTML, bannerHeight, favIconURL string) (http.Handler, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if !isHTMLRequest(r) {
@@ -175,6 +210,7 @@ func Proxy(ctx context.Context, wrapped http.Handler, bannerHTML, bannerHeight s
 			bannerHeight:    bannerHeight,
 			targetURL:       r.URL,
 			isAlreadyFramed: isAlreadyFramed(r),
+			favIconURL:      favIconURL,
 		}
 		wrapped.ServeHTTP(w, r)
 	})

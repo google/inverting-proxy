@@ -61,6 +61,7 @@ var (
 	backendID            = flag.String("backend", "", "Unique ID for this backend.")
 	debug                = flag.Bool("debug", false, "Whether or not to print debug log messages")
 	disableSSLForTest    = flag.Bool("disable-ssl-for-test", false, "Disable requirements for SSL when running tests locally")
+	favIconURL           = flag.String("favicon-url", "", "URL of the favicon")
 	forwardUserID        = flag.Bool("forward-user-id", false, "Whether or not to include the ID (email address) of the end user in requests to the backend")
 	injectBanner         = flag.String("inject-banner", "", "HTML snippet to inject in served webpages")
 	bannerHeight         = flag.String("banner-height", "40px", "Height of the injected banner. This is ignored if no banner is set.")
@@ -96,7 +97,7 @@ func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) 
 	if *injectBanner == "" {
 		return h, nil
 	}
-	return banner.Proxy(ctx, h, *injectBanner, *bannerHeight)
+	return banner.Proxy(ctx, h, *injectBanner, *bannerHeight, *favIconURL)
 }
 
 // forwardRequest forwards the given request from the proxy to
