@@ -120,7 +120,7 @@ func setXFrameOptionsSameOrigin(h http.Header) {
 }
 
 func (w *bannerResponseWriter) getFavIconLink() (string, error) {
-	if w.favIconURL != "" {
+	if w.favIconURL == "" {
 		return "", nil
 	}
 	var favIconLinkBuf bytes.Buffer
