@@ -164,7 +164,11 @@ func NewConnection(ctx context.Context, targetURL string, header http.Header, er
 
 // Close closes the websocket client connection.
 func (conn *Connection) Close() {
-	// Wlosing the writing routine.
+	conn.clientMessages <- &message{
+		websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+	}
+	// Closing the writing routine.
 	close(conn.clientMessages)
 }
 
