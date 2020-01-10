@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"sync"
 	"time"
 
 	"context"
@@ -96,12 +95,12 @@ func NewConnection(ctx context.Context, targetURL string, header http.Header, er
 	// Since we are using a channel to pull messages from the connection, we will also use one to
 	// push messages. That way our handling of reads and writes are consistent.
 	clientMessages := make(chan *message, 10)
-	var wg sync.WaitGroup
-	wg.Add(2)
+
+	closeConn := make(chan bool)
 	go func() {
-		defer wg.Done()
 		defer func() {
 			close(serverMessages)
+			closeConn <- true
 		}()
 		for {
 			select {
@@ -123,12 +122,17 @@ func NewConnection(ctx context.Context, targetURL string, header http.Header, er
 		}
 	}()
 	go func() {
-		defer wg.Done()
+		defer func() {
+			closeConn <- true
+		}()
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case clientMsg := <-clientMessages:
+			case clientMsg, ok := <-clientMessages:
+				if !ok {
+					return
+				}
 				if clientMsg == nil {
 					continue
 				}
@@ -142,12 +146,10 @@ func NewConnection(ctx context.Context, targetURL string, header http.Header, er
 		}
 	}()
 	go func() {
-		wg.Wait()
-		if err := serverConn.WriteMessage(
-			websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.CloseNormalClosure, "")); err != nil {
-			errCallback(fmt.Errorf("failure issuing a close message on a server websocket connection: %v", err))
-		}
+		<-closeConn
+		// if either routines finishes, terminate the other
+		cancel()
+		// closing the serverConn. This will cause serverConn.ReadMessage to stop.
 		if err := serverConn.Close(); err != nil {
 			errCallback(fmt.Errorf("failure closing a server websocket connection: %v", err))
 		}
@@ -162,7 +164,11 @@ func NewConnection(ctx context.Context, targetURL string, header http.Header, er
 
 // Close closes the websocket client connection.
 func (conn *Connection) Close() {
-	conn.cancel()
+	conn.clientMessages <- &message{
+		websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+	}
+	// Closing the writing routine.
 	close(conn.clientMessages)
 }
 
