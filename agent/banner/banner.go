@@ -27,15 +27,16 @@ import (
 )
 
 const (
-	acceptHeader        = "Accept"
-	cacheControlHeader  = "Cache-Control"
-	contentTypeHeader   = "Content-Type"
-	dateHeader          = "Date"
-	expiresHeader       = "Expires"
-	refererHeader       = "Referer"
-	pragmaHeader        = "Pragma"
-	secFetchModeHeader  = "Sec-Fetch-Mode"
-	xFrameOptionsHeader = "X-Frame-Options"
+	acceptHeader          = "Accept"
+	cacheControlHeader    = "Cache-Control"
+	contentEncodingHeader = "Content-Encoding"
+	contentTypeHeader     = "Content-Type"
+	dateHeader            = "Date"
+	expiresHeader         = "Expires"
+	refererHeader         = "Referer"
+	pragmaHeader          = "Pragma"
+	secFetchModeHeader    = "Sec-Fetch-Mode"
+	xFrameOptionsHeader   = "X-Frame-Options"
 
 	frameWrapperTemplate = `<html>
   <head>
@@ -170,6 +171,8 @@ func (w *bannerResponseWriter) WriteHeader(statusCode int) {
 		w.wrapped.WriteHeader(statusCode)
 		w.writeBytes = true
 		return
+	} else {
+		w.Header().Del(contentEncodingHeader)
 	}
 	favIconLink, err := w.getFavIconLink()
 	if err != nil {
