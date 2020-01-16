@@ -268,7 +268,7 @@ type sessionMessage struct {
 	Message interface{} `json:"msg,omitempty"`
 }
 
-func createShimChannel(ctx context.Context, host, shimPath string) http.Handler {
+func createShimChannel(ctx context.Context, host, shimPath string, debug bool) http.Handler {
 	var connections sync.Map
 	var sessionCount uint64
 	mux := http.NewServeMux()
@@ -298,7 +298,7 @@ func createShimChannel(ctx context.Context, host, shimPath string) http.Handler 
 				r.Header.Set("Origin", originURL.String())
 			}
 		}
-		conn, err := NewConnection(ctx, targetURL.String(), r.Header,
+		conn, err := NewConnection(ctx, targetURL.String(), r.Header, debug,
 			func(err error) {
 				log.Printf("Websocket failure: %v", err)
 			})
@@ -323,6 +323,9 @@ func createShimChannel(ctx context.Context, host, shimPath string) http.Handler 
 		w.Write(respBytes)
 	})
 	mux.HandleFunc(path.Join(shimPath, "close"), func(w http.ResponseWriter, r *http.Request) {
+		if debug {
+			log.Print("Received Close")
+		}
 		body, err := ioutil.ReadAll(r.Body)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("internal error reading a shim request: %v", err), http.StatusInternalServerError)
@@ -419,7 +422,7 @@ func createShimChannel(ctx context.Context, host, shimPath string) http.Handler 
 }
 
 // Proxy creates a reverse proxy that inserts websocket-shim code into all HTML responses.
-func Proxy(ctx context.Context, wrapped *httputil.ReverseProxy, host, shimPath string, injectShimCode bool) (http.Handler, error) {
+func Proxy(ctx context.Context, wrapped *httputil.ReverseProxy, host, shimPath string, injectShimCode bool, debug bool) (http.Handler, error) {
 	var templateBuf bytes.Buffer
 	if err := shimTmpl.Execute(&templateBuf, &struct{ ShimPath string }{ShimPath: shimPath}); err != nil {
 		return nil, err
@@ -433,7 +436,7 @@ func Proxy(ctx context.Context, wrapped *httputil.ReverseProxy, host, shimPath s
 	mux := http.NewServeMux()
 	if shimPath != "" {
 		shimPath = path.Clean("/"+shimPath) + "/"
-		shimServer := createShimChannel(ctx, host, shimPath)
+		shimServer := createShimChannel(ctx, host, shimPath, debug)
 		mux.Handle(shimPath, shimServer)
 	}
 	mux.Handle("/", wrapped)

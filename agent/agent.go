@@ -88,7 +88,7 @@ func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) 
 	var h http.Handler = hostProxy
 	if shimPath != "" {
 		var err error
-		h, err = websockets.Proxy(ctx, hostProxy, host, shimPath, injectShimCode)
+		h, err = websockets.Proxy(ctx, hostProxy, host, shimPath, injectShimCode, *debug)
 		if err != nil {
 			return nil, err
 		}

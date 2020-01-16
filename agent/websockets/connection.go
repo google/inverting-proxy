@@ -77,7 +77,7 @@ func stripWSHeader(header http.Header) http.Header {
 }
 
 // NewConnection creates and returns a new Connection.
-func NewConnection(ctx context.Context, targetURL string, header http.Header, errCallback func(err error)) (*Connection, error) {
+func NewConnection(ctx context.Context, targetURL string, header http.Header, debug bool, errCallback func(err error)) (*Connection, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	serverConn, _, err := websocket.DefaultDialer.Dial(targetURL, stripWSHeader(header))
 	if err != nil {
@@ -99,6 +99,9 @@ func NewConnection(ctx context.Context, targetURL string, header http.Header, er
 	closeConn := make(chan bool)
 	go func() {
 		defer func() {
+			if debug {
+				log.Printf("ReadMessage routine closed.")
+			}
 			close(serverMessages)
 			closeConn <- true
 		}()
@@ -123,6 +126,9 @@ func NewConnection(ctx context.Context, targetURL string, header http.Header, er
 	}()
 	go func() {
 		defer func() {
+			if debug {
+				log.Printf("WriteMessage routine closed.")
+			}
 			closeConn <- true
 		}()
 		for {
