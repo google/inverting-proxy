@@ -129,6 +129,7 @@ func healthCheck() error {
 		log.Printf("Health Check request failed: %s", err.Error())
 		return err
 	}
+	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		log.Printf("Health Check request had non-200 status code: %d", resp.StatusCode)
 		return fmt.Errorf("Bad Health Check Response Code: %s", resp.Status)
