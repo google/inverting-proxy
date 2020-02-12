@@ -286,18 +286,6 @@ func createShimChannel(ctx context.Context, host, shimPath string) http.Handler 
 		}
 		targetURL.Scheme = "ws"
 		targetURL.Host = host
-		if origin := r.Header.Get("Origin"); origin != "" {
-			originURL, err := url.Parse(origin)
-			if err != nil {
-				http.Error(w, fmt.Sprintf("malformed origin in websocket request: %q", origin), http.StatusBadRequest)
-				return
-			}
-			if originURL.Host == r.Host {
-				// Rewrite the origin header so it matches the target URL.
-				originURL.Host = targetURL.Host
-				r.Header.Set("Origin", originURL.String())
-			}
-		}
 		conn, err := NewConnection(ctx, targetURL.String(), r.Header,
 			func(err error) {
 				log.Printf("Websocket failure: %v", err)
