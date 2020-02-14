@@ -35,6 +35,7 @@ const (
 	expiresHeader         = "Expires"
 	refererHeader         = "Referer"
 	pragmaHeader          = "Pragma"
+	secFetchDestHeader    = "Sec-Fetch-Dest"
 	secFetchModeHeader    = "Sec-Fetch-Mode"
 	xFrameOptionsHeader   = "X-Frame-Options"
 
@@ -79,7 +80,7 @@ func isHTMLResponse(statusCode int, responseHeader http.Header) bool {
 }
 
 func isAlreadyFramed(r *http.Request) bool {
-	if r.Header.Get(secFetchModeHeader) == "nested-navigate" {
+	if r.Header.Get(secFetchModeHeader) == "nested-navigate" || r.Header.Get(secFetchDestHeader) == "iframe" {
 		// If the browser told us the page is already framed, then believe it.
 		return true
 	}
