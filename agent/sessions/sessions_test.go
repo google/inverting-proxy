@@ -97,6 +97,31 @@ func TestSessionsEnabled(t *testing.T) {
 	}
 }
 
+func TestSessionsEnabledIfNoCookieSet(t *testing.T) {
+	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("OK"))
+	})
+	c := NewCache(sessionCookie, sessionLifetime, sessionCount, true)
+	h := c.SessionHandler(testHandler)
+	testServer := httptest.NewServer(h)
+	defer testServer.Close()
+
+	client, err := client(testServer)
+	if err != nil {
+		t.Fatalf("Failure creating a client for the test server: %v", err)
+	}
+	resp, err := (client).Get(testServer.URL)
+	if err != nil {
+		t.Errorf("Failure getting a response for a request proxied with sessions: %v", err)
+	} else if got, want := resp.StatusCode, http.StatusOK; got != want {
+		t.Errorf("Unexpected response from a request proxied with sessions: got %d, want %d", got, want)
+	}
+	cookies := resp.Cookies()
+	if len(cookies) != 1 || cookies[0].Name != sessionCookie {
+		t.Errorf("Unexpected cookies found when proxying a request with sessions: %v", cookies)
+	}
+}
+
 func TestSessionsDisabled(t *testing.T) {
 	testHandler := backendHandler(t)
 	var c *Cache
