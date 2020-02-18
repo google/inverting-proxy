@@ -84,11 +84,6 @@ func (w *sessionResponseWriter) WriteHeader(statusCode int) {
 	w.wroteHeader = true
 	header := w.Header()
 	cookiesToAdd := (&http.Response{Header: header}).Cookies()
-	if len(cookiesToAdd) == 0 {
-		// There were no cookies to intercept
-		w.wrapped.WriteHeader(statusCode)
-		return
-	}
 	header.Del("Set-Cookie")
 	if w.sessionID == "" {
 		// No session was previously defined, so we need to create a new one
@@ -106,6 +101,11 @@ func (w *sessionResponseWriter) WriteHeader(statusCode int) {
 	cookieJar, err := w.c.cachedCookieJar(w.sessionID)
 	if err != nil {
 		log.Printf("Failure reading a cached cookie jar: %v", err)
+	}
+	if len(cookiesToAdd) == 0 {
+		// There were no cookies to intercept
+		w.wrapped.WriteHeader(statusCode)
+		return
 	}
 	cookieJar.SetCookies(w.urlForCookies, cookiesToAdd)
 	w.wrapped.WriteHeader(statusCode)
