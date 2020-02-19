@@ -147,6 +147,8 @@ func TestIsAlreadyFramed(t *testing.T) {
 				},
 				Header: http.Header{
 					"Referer": []string{"https://example.com/some/other/path"},
+					"Sec-Fetch-Dest": []string{"document"},
+					"Sec-Fetch-Mode": []string{"navigate"},
 				},
 			},
 			want: false,
@@ -159,6 +161,32 @@ func TestIsAlreadyFramed(t *testing.T) {
 				},
 				Header: http.Header{
 					"Referer": []string{"https://example.com/some/example/path"},
+				},
+			},
+			want: true,
+		},
+		{
+			req: &http.Request{
+				Host: "example.com",
+				URL: &url.URL{
+					Path: "/some/example/path",
+				},
+				Header: http.Header{
+					"Referer": []string{"https://example.com/some/other/path"},
+					"Sec-Fetch-Dest": []string{"iframe"},
+				},
+			},
+			want: true,
+		},
+		{
+			req: &http.Request{
+				Host: "example.com",
+				URL: &url.URL{
+					Path: "/some/example/path",
+				},
+				Header: http.Header{
+					"Referer": []string{"https://example.com/some/other/path"},
+					"Sec-Fetch-Mode": []string{"nested-navigate"},
 				},
 			},
 			want: true,
