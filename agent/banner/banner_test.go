@@ -116,6 +116,16 @@ func TestIsHTMLResponse(t *testing.T) {
 			resp: &http.Response{
 				StatusCode: http.StatusOK,
 				Header: http.Header{
+					"Content-Type":        []string{"text/html"},
+					"Content-Disposition": []string{"filename=out.html", "attachment"},
+				},
+			},
+			want: false,
+		},
+		{
+			resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header: http.Header{
 					"Content-Type": []string{"text/html"},
 				},
 			},
@@ -124,7 +134,7 @@ func TestIsHTMLResponse(t *testing.T) {
 	}
 
 	for _, testCase := range testCases {
-		if got, want := isHTMLResponse(testCase.resp.StatusCode, testCase.resp.Header), testCase.want; got != want {
+		if got, want := isFrameableHTMLResponse(testCase.resp.StatusCode, testCase.resp.Header), testCase.want; got != want {
 			t.Errorf("isHTMLResponse(%+v): got %v, want %v", testCase.resp, got, want)
 		}
 	}
@@ -146,7 +156,7 @@ func TestIsAlreadyFramed(t *testing.T) {
 					Path: "/some/example/path",
 				},
 				Header: http.Header{
-					"Referer": []string{"https://example.com/some/other/path"},
+					"Referer":        []string{"https://example.com/some/other/path"},
 					"Sec-Fetch-Dest": []string{"document"},
 					"Sec-Fetch-Mode": []string{"navigate"},
 				},
@@ -172,7 +182,7 @@ func TestIsAlreadyFramed(t *testing.T) {
 					Path: "/some/example/path",
 				},
 				Header: http.Header{
-					"Referer": []string{"https://example.com/some/other/path"},
+					"Referer":        []string{"https://example.com/some/other/path"},
 					"Sec-Fetch-Dest": []string{"iframe"},
 				},
 			},
@@ -185,7 +195,7 @@ func TestIsAlreadyFramed(t *testing.T) {
 					Path: "/some/example/path",
 				},
 				Header: http.Header{
-					"Referer": []string{"https://example.com/some/other/path"},
+					"Referer":        []string{"https://example.com/some/other/path"},
 					"Sec-Fetch-Mode": []string{"nested-navigate"},
 				},
 			},
