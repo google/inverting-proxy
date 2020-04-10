@@ -27,17 +27,18 @@ import (
 )
 
 const (
-	acceptHeader          = "Accept"
-	cacheControlHeader    = "Cache-Control"
-	contentEncodingHeader = "Content-Encoding"
-	contentTypeHeader     = "Content-Type"
-	dateHeader            = "Date"
-	expiresHeader         = "Expires"
-	refererHeader         = "Referer"
-	pragmaHeader          = "Pragma"
-	secFetchDestHeader    = "Sec-Fetch-Dest"
-	secFetchModeHeader    = "Sec-Fetch-Mode"
-	xFrameOptionsHeader   = "X-Frame-Options"
+	acceptHeader             = "Accept"
+	cacheControlHeader       = "Cache-Control"
+	contentDispositionHeader = "Content-Disposition"
+	contentEncodingHeader    = "Content-Encoding"
+	contentTypeHeader        = "Content-Type"
+	dateHeader               = "Date"
+	expiresHeader            = "Expires"
+	refererHeader            = "Referer"
+	pragmaHeader             = "Pragma"
+	secFetchDestHeader       = "Sec-Fetch-Dest"
+	secFetchModeHeader       = "Sec-Fetch-Mode"
+	xFrameOptionsHeader      = "X-Frame-Options"
 
 	frameWrapperTemplate = `<html>
   <head>
@@ -71,12 +72,21 @@ func isHTMLRequest(r *http.Request) bool {
 	return strings.Contains(accept, "text/html")
 }
 
-func isHTMLResponse(statusCode int, responseHeader http.Header) bool {
+func isFrameableHTMLResponse(statusCode int, responseHeader http.Header) bool {
 	if statusCode != http.StatusOK {
 		return false
 	}
-	contentType := responseHeader.Get(contentTypeHeader)
-	return strings.Contains(contentType, "text/html") || strings.Contains(contentType, "application/xhtml+xml")
+	for _, contentDisposition := range responseHeader[contentDispositionHeader] {
+		if strings.Contains(contentDisposition, "attachment") {
+			return false
+		}
+	}
+	for _, contentType := range responseHeader[contentTypeHeader] {
+		if strings.Contains(contentType, "text/html") || strings.Contains(contentType, "application/xhtml+xml") {
+			return true
+		}
+	}
+	return false
 }
 
 func isAlreadyFramed(r *http.Request) bool {
@@ -161,7 +171,7 @@ func (w *bannerResponseWriter) WriteHeader(statusCode int) {
 		return
 	}
 	w.wroteHeader = true
-	if !isHTMLResponse(statusCode, w.Header()) {
+	if !isFrameableHTMLResponse(statusCode, w.Header()) {
 		w.wrapped.WriteHeader(statusCode)
 		w.writeBytes = true
 		return
