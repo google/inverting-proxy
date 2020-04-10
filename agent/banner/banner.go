@@ -76,12 +76,12 @@ func isFrameableHTMLResponse(statusCode int, responseHeader http.Header) bool {
 	if statusCode != http.StatusOK {
 		return false
 	}
-	for _, contentDisposition := range responseHeader.Values(contentDispositionHeader) {
+	for _, contentDisposition := range responseHeader[contentDispositionHeader] {
 		if strings.Contains(contentDisposition, "attachment") {
 			return false
 		}
 	}
-	for _, contentType := range responseHeader.Values(contentTypeHeader) {
+	for _, contentType := range responseHeader[contentTypeHeader] {
 		if strings.Contains(contentType, "text/html") || strings.Contains(contentType, "application/xhtml+xml") {
 			return true
 		}
