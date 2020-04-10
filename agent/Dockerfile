@@ -24,9 +24,9 @@ RUN apt-get update && apt-get upgrade -y && \
 
 ADD ./ /opt/src/github.com/google/inverting-proxy
 
-RUN wget -O /opt/go1.11.1.linux-amd64.tar.gz \
-      https://storage.googleapis.com/golang/go1.11.1.linux-amd64.tar.gz && \
-    tar -C /usr/local -xzf /opt/go1.11.1.linux-amd64.tar.gz && \
+RUN wget -O /opt/go1.14.2.linux-amd64.tar.gz \
+      https://storage.googleapis.com/golang/go1.14.2.linux-amd64.tar.gz && \
+    tar -C /usr/local -xzf /opt/go1.14.2.linux-amd64.tar.gz && \
     export PATH=${PATH}:/usr/local/go/bin/:/opt/bin/ && \
     export GOPATH=/opt/ && \
     go get github.com/golang/groupcache/lru && \
