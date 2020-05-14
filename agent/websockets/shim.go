@@ -268,7 +268,7 @@ type sessionMessage struct {
 	Message interface{} `json:"msg,omitempty"`
 }
 
-func createShimChannel(ctx context.Context, host, shimPath string) http.Handler {
+func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost bool) http.Handler {
 	var connections sync.Map
 	var sessionCount uint64
 	mux := http.NewServeMux()
@@ -286,6 +286,9 @@ func createShimChannel(ctx context.Context, host, shimPath string) http.Handler 
 		}
 		targetURL.Scheme = "ws"
 		targetURL.Host = host
+		if originalHost := r.Host; rewriteHost && originalHost != "" {
+                  r.Header.Set("Host", r.Host)
+                }
 		conn, err := NewConnection(ctx, targetURL.String(), r.Header,
 			func(err error) {
 				log.Printf("Websocket failure: %v", err)
@@ -407,7 +410,7 @@ func createShimChannel(ctx context.Context, host, shimPath string) http.Handler 
 }
 
 // Proxy creates a reverse proxy that inserts websocket-shim code into all HTML responses.
-func Proxy(ctx context.Context, wrapped *httputil.ReverseProxy, host, shimPath string, injectShimCode bool) (http.Handler, error) {
+func Proxy(ctx context.Context, wrapped *httputil.ReverseProxy, host, shimPath string, injectShimCode, rewriteHost bool) (http.Handler, error) {
 	var templateBuf bytes.Buffer
 	if err := shimTmpl.Execute(&templateBuf, &struct{ ShimPath string }{ShimPath: shimPath}); err != nil {
 		return nil, err
@@ -421,7 +424,7 @@ func Proxy(ctx context.Context, wrapped *httputil.ReverseProxy, host, shimPath s
 	mux := http.NewServeMux()
 	if shimPath != "" {
 		shimPath = path.Clean("/"+shimPath) + "/"
-		shimServer := createShimChannel(ctx, host, shimPath)
+		shimServer := createShimChannel(ctx, host, shimPath, rewriteHost)
 		mux.Handle(shimPath, shimServer)
 	}
 	mux.Handle("/", wrapped)

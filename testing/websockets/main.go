@@ -54,7 +54,7 @@ func main() {
 		log.Fatalf("Failure parsing the address of the backend server: %v", err)
 	}
 	backendProxy := httputil.NewSingleHostReverseProxy(backendURL)
-	shimmingProxy, err := websockets.Proxy(context.Background(), backendProxy, backendURL.Host, *shimPath, true)
+	shimmingProxy, err := websockets.Proxy(context.Background(), backendProxy, backendURL.Host, *shimPath, true, true)
 	if err != nil {
 		log.Fatal("Failure starting the websocket-shimming proxy: %v", err)
 	}
