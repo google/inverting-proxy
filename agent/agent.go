@@ -75,7 +75,7 @@ var (
 	sessionCookieName       = flag.String("session-cookie-name", "", "Name of the session cookie; an empty value disables agent-based session tracking")
 	sessionCookieTimeout    = flag.Duration("session-cookie-timeout", 12*time.Hour, "Expiration flag for the session cookie")
 	sessionCookieCacheLimit = flag.Int("session-cookie-cache-limit", 1000, "Upper bound on the number of concurrent sessions that can be tracked by the agent")
-	rewriteWebsocketHost = flag.Bool("rewrite-websocket-host", false, "Whether to rewrite the Host header to the original request when shimming a websocket connection")
+	rewriteWebsocketHost    = flag.Bool("rewrite-websocket-host", false, "Whether to rewrite the Host header to the original request when shimming a websocket connection")
 
 	sessionLRU *sessions.Cache
 )
@@ -87,14 +87,19 @@ func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) 
 	})
 	hostProxy.FlushInterval = 100 * time.Millisecond
 	var h http.Handler = hostProxy
+	h = sessionLRU.SessionHandler(h)
 	if shimPath != "" {
 		var err error
-		h, err = websockets.Proxy(ctx, hostProxy, host, shimPath, injectShimCode, *rewriteWebsocketHost)
+		h, err = websockets.Proxy(ctx, h, host, shimPath, *rewriteWebsocketHost, sessionLRU.SessionHandler)
+		if injectShimCode {
+			hostProxy.ModifyResponse = func(resp *http.Response) error {
+				return websockets.ShimBody(resp, shimPath)
+			}
+		}
 		if err != nil {
 			return nil, err
 		}
 	}
-	h = sessionLRU.SessionHandler(h)
 	if *injectBanner == "" {
 		return h, nil
 	}
