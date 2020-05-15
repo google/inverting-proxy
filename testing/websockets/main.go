@@ -55,12 +55,14 @@ func main() {
 	}
 	backendProxy := httputil.NewSingleHostReverseProxy(backendURL)
 	shimmingProxy, err := websockets.Proxy(context.Background(), backendProxy, backendURL.Host, *shimPath, true, func(h http.Handler) http.Handler { return h })
-	backendProxy.ModifyResponse = func(resp *http.Response) error {
-		return websockets.ShimBody(resp, *shimPath)
-	}
 	if err != nil {
 		log.Fatal("Failure starting the websocket-shimming proxy: %v", err)
 	}
+	shimFunc, err := websockets.ShimBody(*shimPath)
+	if err != nil {
+		log.Fatal("Failure setting up shim injection code: %v", err)
+	}
+	backendProxy.ModifyResponse = shimFunc
 
 	http.Handle("/", shimmingProxy)
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", *port), nil))

@@ -90,11 +90,22 @@ func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) 
 	h = sessionLRU.SessionHandler(h)
 	if shimPath != "" {
 		var err error
+		// Note that we pass in the sessionHandler to the websocket proxy twice (h and sessionLRU.SessionHandler)
+		// h is the wrapped handler that will handle all non-websocket-shim requests
+		// sessionLRU.SessionHandler will be called for websocket open requests
+		// This is necessary to handle an edge case in session handling. Websocket open requests arrive with a path
+		// of `/$shimPath/open`. The original target URL and path are encoded in the request body, which is
+		// restored in the websocket handler. This means that attempting to restore session cookies that are
+		// restricted to a path prefix not equal to "/" will fail for websocket open requests. Passing in the
+		// sessionHandler twice allows the websocket handler to ensure that cookies are applied based on the
+		// correct, restored path.
 		h, err = websockets.Proxy(ctx, h, host, shimPath, *rewriteWebsocketHost, sessionLRU.SessionHandler)
 		if injectShimCode {
-			hostProxy.ModifyResponse = func(resp *http.Response) error {
-				return websockets.ShimBody(resp, shimPath)
+			shimFunc, err := websockets.ShimBody(shimPath)
+			if err != nil {
+				return nil, err
 			}
+			hostProxy.ModifyResponse = shimFunc
 		}
 		if err != nil {
 			return nil, err
