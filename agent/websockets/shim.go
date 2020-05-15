@@ -24,7 +24,6 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
-	"net/http/httputil"
 	"net/url"
 	"path"
 	"strings"
@@ -236,31 +235,38 @@ func (sb *shimmedBody) Close() error {
 	return sb.closer.Close()
 }
 
-func shimBody(resp *http.Response, shimCode string) error {
-	if resp == nil || resp.Body == nil {
-		// We have nothing to do on an empty response
-		return nil
+func ShimBody(shimPath string) (func(resp *http.Response) error, error) {
+	var templateBuf bytes.Buffer
+	if err := shimTmpl.Execute(&templateBuf, &struct{ ShimPath string }{ShimPath: shimPath}); err != nil {
+		return nil, err
 	}
-	contentType := strings.ToLower(resp.Header.Get(contentTypeHeader))
-	if !strings.Contains(contentType, "html") {
-		// We only want to modify HTML responses
-		return nil
-	}
-	wrapped := resp.Body
+	shimCode := templateBuf.String()
+	return func(resp *http.Response) error {
+		if resp == nil || resp.Body == nil {
+			// We have nothing to do on an empty response
+			return nil
+		}
+		contentType := strings.ToLower(resp.Header.Get(contentTypeHeader))
+		if !strings.Contains(contentType, "html") {
+			// We only want to modify HTML responses
+			return nil
+		}
+		wrapped := resp.Body
 
-	// Read in the first kilobyte to see if the <head> tag exists in it
-	buf := make([]byte, 1024)
-	count, err := wrapped.Read(buf)
-	if err != nil && err != io.EOF {
-		return err
-	}
-	prefix := strings.Replace(string(buf[0:count]), "<head>", "<head>"+shimCode, 1)
-	resp.Body = &shimmedBody{
-		reader: io.MultiReader(strings.NewReader(prefix), wrapped),
-		closer: wrapped,
-	}
-	resp.Header.Del("Content-Length")
-	return nil
+		// Read in the first kilobyte to see if the <head> tag exists in it
+		buf := make([]byte, 1024)
+		count, err := wrapped.Read(buf)
+		if err != nil && err != io.EOF {
+			return err
+		}
+		prefix := strings.Replace(string(buf[0:count]), "<head>", "<head>"+shimCode, 1)
+		resp.Body = &shimmedBody{
+			reader: io.MultiReader(strings.NewReader(prefix), wrapped),
+			closer: wrapped,
+		}
+		resp.Header.Del("Content-Length")
+		return nil
+	}, nil
 }
 
 type sessionMessage struct {
@@ -268,38 +274,29 @@ type sessionMessage struct {
 	Message interface{} `json:"msg,omitempty"`
 }
 
-func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost bool) http.Handler {
+func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost bool, openWebsocketWrapper func(http.Handler) http.Handler) http.Handler {
 	var connections sync.Map
 	var sessionCount uint64
 	mux := http.NewServeMux()
-	mux.HandleFunc(path.Join(shimPath, "open"), func(w http.ResponseWriter, r *http.Request) {
+	openWebsocketHandler := openWebsocketWrapper(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sessionID := fmt.Sprintf("%d", atomic.AddUint64(&sessionCount, 1))
-		body, err := ioutil.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("internal error reading a shim request: %v", err), http.StatusInternalServerError)
-			return
-		}
-		targetURL, err := url.Parse(string(body))
-		if err != nil {
-			http.Error(w, fmt.Sprintf("malformed shim open request: %v", err), http.StatusBadRequest)
-			return
-		}
+		targetURL := *(r.URL)
 		targetURL.Scheme = "ws"
 		targetURL.Host = host
 		if originalHost := r.Host; rewriteHost && originalHost != "" {
-                  r.Header.Set("Host", r.Host)
-                }
+			r.Header.Set("Host", originalHost)
+		}
 		conn, err := NewConnection(ctx, targetURL.String(), r.Header,
 			func(err error) {
 				log.Printf("Websocket failure: %v", err)
 			})
 		if err != nil {
-			log.Printf("Failed to dial the websocket server %q: %v\n", targetURL, err)
+			log.Printf("Failed to dial the websocket server %q: %v\n", targetURL.String(), err)
 			http.Error(w, fmt.Sprintf("internal error opening a shim connection: %v", err), http.StatusInternalServerError)
 			return
 		}
 		connections.Store(sessionID, conn)
-		log.Printf("Websocket connection to the server %q established for session: %v\n", targetURL, sessionID)
+		log.Printf("Websocket connection to the server %q established for session: %v\n", targetURL.String(), sessionID)
 		resp := &sessionMessage{
 			ID:      sessionID,
 			Message: targetURL.String(),
@@ -312,6 +309,21 @@ func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost b
 		}
 		w.WriteHeader(http.StatusOK)
 		w.Write(respBytes)
+	}))
+	mux.HandleFunc(path.Join(shimPath, "open"), func(w http.ResponseWriter, r *http.Request) {
+		body, err := ioutil.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("internal error reading a shim request: %v", err), http.StatusInternalServerError)
+			return
+		}
+		targetURL, err := url.Parse(string(body))
+		if err != nil {
+			http.Error(w, fmt.Sprintf("malformed shim open request: %v", err), http.StatusBadRequest)
+			return
+		}
+		// Restore the original request URL before calling the openWebsocketWrapper
+		r.URL = targetURL
+		openWebsocketHandler.ServeHTTP(w, r)
 	})
 	mux.HandleFunc(path.Join(shimPath, "close"), func(w http.ResponseWriter, r *http.Request) {
 		body, err := ioutil.ReadAll(r.Body)
@@ -410,21 +422,14 @@ func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost b
 }
 
 // Proxy creates a reverse proxy that inserts websocket-shim code into all HTML responses.
-func Proxy(ctx context.Context, wrapped *httputil.ReverseProxy, host, shimPath string, injectShimCode, rewriteHost bool) (http.Handler, error) {
-	var templateBuf bytes.Buffer
-	if err := shimTmpl.Execute(&templateBuf, &struct{ ShimPath string }{ShimPath: shimPath}); err != nil {
-		return nil, err
-	}
-	shimCode := templateBuf.String()
-	if injectShimCode {
-		wrapped.ModifyResponse = func(resp *http.Response) error {
-			return shimBody(resp, shimCode)
-		}
-	}
+// openWebsocketWrapper is a http.Handler wrapper function that is invoked on websocket open requests after the original
+// targetURL of the request is restored. It must call the wrapped http.Handler with which it is created after it
+// is finished processing the request.
+func Proxy(ctx context.Context, wrapped http.Handler, host, shimPath string, rewriteHost bool, openWebsocketWrapper func(wrapped http.Handler) http.Handler) (http.Handler, error) {
 	mux := http.NewServeMux()
 	if shimPath != "" {
 		shimPath = path.Clean("/"+shimPath) + "/"
-		shimServer := createShimChannel(ctx, host, shimPath, rewriteHost)
+		shimServer := createShimChannel(ctx, host, shimPath, rewriteHost, openWebsocketWrapper)
 		mux.Handle(shimPath, shimServer)
 	}
 	mux.Handle("/", wrapped)

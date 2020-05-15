@@ -75,7 +75,7 @@ var (
 	sessionCookieName       = flag.String("session-cookie-name", "", "Name of the session cookie; an empty value disables agent-based session tracking")
 	sessionCookieTimeout    = flag.Duration("session-cookie-timeout", 12*time.Hour, "Expiration flag for the session cookie")
 	sessionCookieCacheLimit = flag.Int("session-cookie-cache-limit", 1000, "Upper bound on the number of concurrent sessions that can be tracked by the agent")
-	rewriteWebsocketHost = flag.Bool("rewrite-websocket-host", false, "Whether to rewrite the Host header to the original request when shimming a websocket connection")
+	rewriteWebsocketHost    = flag.Bool("rewrite-websocket-host", false, "Whether to rewrite the Host header to the original request when shimming a websocket connection")
 
 	sessionLRU *sessions.Cache
 )
@@ -87,14 +87,30 @@ func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) 
 	})
 	hostProxy.FlushInterval = 100 * time.Millisecond
 	var h http.Handler = hostProxy
+	h = sessionLRU.SessionHandler(h)
 	if shimPath != "" {
 		var err error
-		h, err = websockets.Proxy(ctx, hostProxy, host, shimPath, injectShimCode, *rewriteWebsocketHost)
+		// Note that we pass in the sessionHandler to the websocket proxy twice (h and sessionLRU.SessionHandler)
+		// h is the wrapped handler that will handle all non-websocket-shim requests
+		// sessionLRU.SessionHandler will be called for websocket open requests
+		// This is necessary to handle an edge case in session handling. Websocket open requests arrive with a path
+		// of `/$shimPath/open`. The original target URL and path are encoded in the request body, which is
+		// restored in the websocket handler. This means that attempting to restore session cookies that are
+		// restricted to a path prefix not equal to "/" will fail for websocket open requests. Passing in the
+		// sessionHandler twice allows the websocket handler to ensure that cookies are applied based on the
+		// correct, restored path.
+		h, err = websockets.Proxy(ctx, h, host, shimPath, *rewriteWebsocketHost, sessionLRU.SessionHandler)
+		if injectShimCode {
+			shimFunc, err := websockets.ShimBody(shimPath)
+			if err != nil {
+				return nil, err
+			}
+			hostProxy.ModifyResponse = shimFunc
+		}
 		if err != nil {
 			return nil, err
 		}
 	}
-	h = sessionLRU.SessionHandler(h)
 	if *injectBanner == "" {
 		return h, nil
 	}
