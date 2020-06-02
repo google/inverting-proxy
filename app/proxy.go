@@ -380,6 +380,11 @@ func parseBackend(r *http.Request) (*Backend, error) {
 	if err := json.Unmarshal(requestBytes, &backend); err != nil {
 		return nil, err
 	}
+
+	if backend.BackendID == "" || backend.BackendUser == "" || backend.EndUser == "" || len(backend.PathPrefixes) == 0 {
+		return nil, errors.New("Missing required fields")
+	}
+
 	return &backend, nil
 }
 
