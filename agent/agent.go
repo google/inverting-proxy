@@ -205,7 +205,7 @@ func getGoogleClient(ctx context.Context) (*http.Client, error) {
 		for _, prevReq := range via {
 			if prevReq.Method != req.Method {
 				return fmt.Errorf(
-					"Method change not allowed in redirect: %s changed to %s", prevReq.Method, req.Method)
+					"Method change not allowed in redirect: %s -> %s", prevReq.Method, req.Method)
 			}
 		}
 		return nil
