@@ -92,7 +92,7 @@ There are two components required for the inverting proxy to work:
 
 ### Inverting Proxy
 
-The inverting proxy serves the same roll as a reverse proxy, but additionally
+The inverting proxy serves the same role as a reverse proxy, but additionally
 inverts the direction of traffic to the agent.
 
 There are two different versions of the inverting proxy: one that runs in
