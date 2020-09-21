@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -272,12 +273,14 @@ func ShimBody(shimPath string) (func(resp *http.Response) error, error) {
 type sessionMessage struct {
 	ID      string      `json:"id,omitempty"`
 	Message interface{} `json:"msg,omitempty"`
+	Version int         `json:"v,omitempty"`
 }
 
 func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost bool, openWebsocketWrapper func(http.Handler) http.Handler) http.Handler {
 	var connections sync.Map
 	var sessionCount uint64
 	mux := http.NewServeMux()
+	var protocolVersion int
 	openWebsocketHandler := openWebsocketWrapper(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sessionID := fmt.Sprintf("%d", atomic.AddUint64(&sessionCount, 1))
 		targetURL := *(r.URL)
@@ -300,6 +303,7 @@ func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost b
 		resp := &sessionMessage{
 			ID:      sessionID,
 			Message: targetURL.String(),
+			Version: protocolVersion,
 		}
 		respBytes, err := json.Marshal(resp)
 		if err != nil {
@@ -323,6 +327,13 @@ func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost b
 		}
 		// Restore the original request URL before calling the openWebsocketWrapper
 		r.URL = targetURL
+		vh := r.Header.Get("X-Websocket-Shim-Version")
+		if vh != "" {
+			v, err := strconv.ParseInt(vh, 10, 64)
+			if err == nil {
+				protocolVersion = int(v)
+			}
+		}
 		openWebsocketHandler.ServeHTTP(w, r)
 	})
 	mux.HandleFunc(path.Join(shimPath, "close"), func(w http.ResponseWriter, r *http.Request) {
@@ -373,7 +384,7 @@ func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost b
 				http.Error(w, "internal error reading a shim session", http.StatusInternalServerError)
 				return
 			}
-			if err := conn.SendClientMessage(msg.Message); err != nil {
+			if err := conn.SendClientMessage(msg.Message, protocolVersion); err != nil {
 				http.Error(w, fmt.Sprintf("attempt to send data on a closed session: %q", msg.ID), http.StatusBadRequest)
 				return
 			}
@@ -402,7 +413,7 @@ func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost b
 			http.Error(w, "internal error reading a shim session", http.StatusInternalServerError)
 			return
 		}
-		serverMsgs, err := conn.ReadServerMessages()
+		serverMsgs, err := conn.ReadServerMessages(protocolVersion)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("attempt to read data from a closed session: %q", msg.ID), http.StatusBadRequest)
 			return
