@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -86,6 +87,12 @@ const (
         if (self.onmessage) {
           msgs.forEach(function(msg) {
             if (Array.isArray(msg)) {
+              if (self.protocolVersion != 0) {
+                for (var i = 0; i < msg.length; i++) {
+                    msg[i] == atob(msg[i]);
+                }
+              }
+              
               msg = new Blob(msg);
             }
             self.onmessage({ target: self, data: msg });
@@ -114,6 +121,7 @@ const (
           }
         };
         req.open("POST", shimUri + action, true);
+        req.setRequestHeader("X-Websocket-Shim-Version", "1");
         if (typeof msg !== 'string') {
           msg = JSON.stringify(msg);
         }
@@ -132,14 +140,14 @@ const (
         if (typeof msg == 'string') {
           return false;
         }
-        if (Array.isArray(msg)) {
-          if (msg.length == 1) {
-            if (typeof msg[0] == 'string') {
-              return false;
-            }
-          }
-        }
-        return true;
+		if (Array.isArray(msg)) {
+		  if (msg.length == 1) {
+	  		if (typeof msg[0] == 'string') {
+  			  return false;
+			}
+		  }
+		}
+		return true;
       }
       self.convertMessagesAndPush = function(msgs) {
         for (var i = 0; i < msgs.length; i++) {
@@ -147,11 +155,15 @@ const (
             var blob = new Blob([msgs[i].msg]);
             var reader = new FileReader();
             reader.addEventListener("loadend", function() {
-              msgs[i].msg = [reader.result];
-              self.convertMessagesAndPush(msgs);
+            if (self.protocolVersion != 0 ) {
+                msgs[i].msg = [btoa(reader.result)];
+            } else {
+                msgs[i].msg = [reader.result];
+            }
+            self.convertMessagesAndPush(msgs);
             });
-            reader.readAsText(blob);
-            return;
+			reader.readAsText(blob);
+			return;
           }
         }
         self.xhr('data', msgs, null, function() {
@@ -181,6 +193,11 @@ const (
 
       self.xhr('open', url, function(resp) {
         respJSON = JSON.parse(resp);
+        if (respJSON.v === undefined) {
+            self.protocolVersion = 0;
+        } else {
+            self.protocolVersion = respJSON.v;
+        }
         self._sessionID = respJSON.id;
         openedHandler(respJSON.msg);
         poll();
@@ -272,12 +289,14 @@ func ShimBody(shimPath string) (func(resp *http.Response) error, error) {
 type sessionMessage struct {
 	ID      string      `json:"id,omitempty"`
 	Message interface{} `json:"msg,omitempty"`
+	Version int         `json:"v,omitempty"`
 }
 
 func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost bool, openWebsocketWrapper func(http.Handler) http.Handler) http.Handler {
 	var connections sync.Map
 	var sessionCount uint64
 	mux := http.NewServeMux()
+
 	openWebsocketHandler := openWebsocketWrapper(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sessionID := fmt.Sprintf("%d", atomic.AddUint64(&sessionCount, 1))
 		targetURL := *(r.URL)
@@ -297,9 +316,17 @@ func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost b
 		}
 		connections.Store(sessionID, conn)
 		log.Printf("Websocket connection to the server %q established for session: %v\n", targetURL.String(), sessionID)
+		vh := r.Header.Get("X-Websocket-Shim-Version")
+		if vh != "" {
+			v, err := strconv.ParseInt(vh, 10, 64)
+			if err == nil {
+				conn.protocolVersion = int(v)
+			}
+		}
 		resp := &sessionMessage{
 			ID:      sessionID,
 			Message: targetURL.String(),
+			Version: conn.protocolVersion,
 		}
 		respBytes, err := json.Marshal(resp)
 		if err != nil {
@@ -323,6 +350,7 @@ func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost b
 		}
 		// Restore the original request URL before calling the openWebsocketWrapper
 		r.URL = targetURL
+
 		openWebsocketHandler.ServeHTTP(w, r)
 	})
 	mux.HandleFunc(path.Join(shimPath, "close"), func(w http.ResponseWriter, r *http.Request) {

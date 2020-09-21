@@ -17,6 +17,7 @@ limitations under the License.
 package websockets
 
 import (
+	"encoding/base64"
 	"fmt"
 	"log"
 	"net/http"
@@ -32,12 +33,17 @@ type message struct {
 	Data []byte
 }
 
-func (m *message) Serialize() interface{} {
+func (m *message) Serialize(version int) interface{} {
 	if m.Type == websocket.TextMessage {
 		return string(m.Data)
 	}
+	if version == 0 {
+		return []string{
+			string(m.Data),
+		}
+	}
 	return []string{
-		string(m.Data),
+		base64.StdEncoding.EncodeToString(m.Data),
 	}
 }
 
@@ -47,10 +53,11 @@ func (m *message) Serialize() interface{} {
 // and encapsulates it in an API that is a little more amenable to how the server side
 // of our websocket shim is implemented.
 type Connection struct {
-	ctx            context.Context
-	cancel         context.CancelFunc
-	clientMessages chan *message
-	serverMessages chan *message
+	ctx             context.Context
+	cancel          context.CancelFunc
+	clientMessages  chan *message
+	serverMessages  chan *message
+	protocolVersion int
 }
 
 // This map defines the set of headers that should be stripped from the WS request, as they
@@ -184,9 +191,21 @@ func (conn *Connection) SendClientMessage(msg interface{}) error {
 		}
 	} else if blobMsg, ok := msg.([]interface{}); ok && len(blobMsg) == 1 {
 		if blobText, ok := blobMsg[0].(string); ok {
-			clientMessage = &message{
-				Type: websocket.BinaryMessage,
-				Data: []byte(blobText),
+			if conn.protocolVersion == 0 {
+				clientMessage = &message{
+					Type: websocket.BinaryMessage,
+					Data: []byte(blobText),
+				}
+			} else {
+				data, err := base64.StdEncoding.DecodeString(blobText)
+				if err != nil {
+					log.Printf("unexpected websocket-shim message format: %+v\n", msg)
+					return fmt.Errorf("unexpected websocket-shim message format: %+v", msg)
+				}
+				clientMessage = &message{
+					Type: websocket.BinaryMessage,
+					Data: data,
+				}
 			}
 		}
 	} else {
@@ -216,12 +235,12 @@ func (conn *Connection) ReadServerMessages() ([]interface{}, error) {
 			// The server messages channel has been closed.
 			return nil, fmt.Errorf("attempt to read a server message from a closed websocket connection")
 		}
-		msgs = append(msgs, serverMsg.Serialize())
+		msgs = append(msgs, serverMsg.Serialize(conn.protocolVersion))
 		for {
 			select {
 			case serverMsg, ok := <-conn.serverMessages:
 				if ok {
-					msgs = append(msgs, serverMsg.Serialize())
+					msgs = append(msgs, serverMsg.Serialize(conn.protocolVersion))
 				} else {
 					return msgs, nil
 				}
