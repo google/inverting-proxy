@@ -296,6 +296,7 @@ func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost b
 	var connections sync.Map
 	var sessionCount uint64
 	mux := http.NewServeMux()
+	var protocolVersion int
 	openWebsocketHandler := openWebsocketWrapper(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sessionID := fmt.Sprintf("%d", atomic.AddUint64(&sessionCount, 1))
 		targetURL := *(r.URL)
@@ -349,6 +350,13 @@ func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost b
 		}
 		// Restore the original request URL before calling the openWebsocketWrapper
 		r.URL = targetURL
+		vh := r.Header.Get("X-Websocket-Shim-Version")
+		if vh != "" {
+			v, err := strconv.ParseInt(vh, 10, 64)
+			if err == nil {
+				protocolVersion = int(v)
+			}
+		}
 		openWebsocketHandler.ServeHTTP(w, r)
 	})
 	mux.HandleFunc(path.Join(shimPath, "close"), func(w http.ResponseWriter, r *http.Request) {
