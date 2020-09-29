@@ -182,7 +182,7 @@ func (conn *Connection) Close() {
 // SendClientMessage sends the given message to the websocket server.
 //
 // The returned error value is non-nill if the connection has been closed.
-func (conn *Connection) SendClientMessage(msg interface{}, ver int) error {
+func (conn *Connection) SendClientMessage(msg interface{}) error {
 	var clientMessage *message
 	if textMsg, ok := msg.(string); ok {
 		clientMessage = &message{
@@ -227,7 +227,7 @@ func (conn *Connection) SendClientMessage(msg interface{}, ver int) error {
 //
 // The returned []string value is nil if the error is non-nil, or if the method
 // times out while waiting for a server message.
-func (conn *Connection) ReadServerMessages(protocolVersion int) ([]interface{}, error) {
+func (conn *Connection) ReadServerMessages() ([]interface{}, error) {
 	var msgs []interface{}
 	select {
 	case serverMsg, ok := <-conn.serverMessages:
