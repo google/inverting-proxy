@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/compute/metadata"
+	"github.com/google/inverting-proxy/agent/metrics"
 )
 
 const (
@@ -112,7 +113,7 @@ type ForwardedRequest struct {
 type RequestCallback func(client *http.Client, fr *ForwardedRequest) error
 
 // parseRequestIDs takes a response from the proxy and parses any forwarded request IDs out of it.
-func parseRequestIDs(response *http.Response) ([]string, error) {
+func parseRequestIDs(response *http.Response, metricHandler *metrics.MetricHandler) ([]string, error) {
 	responseBody := &io.LimitedReader{
 		R: response.Body,
 		// If a response is larger than 1MB, then truncate it. This will result in an
@@ -129,6 +130,7 @@ func parseRequestIDs(response *http.Response) ([]string, error) {
 		return nil, fmt.Errorf("Failed to read the forwarded request: %q\n", err.Error())
 	}
 	if response.StatusCode != http.StatusOK {
+		metricHandler.WriteMetric(metrics.ResponseCount, response.StatusCode)
 		return nil, fmt.Errorf("Failed to list pending requests: %d, %q", response.StatusCode, responseBytes)
 	}
 	if len(responseBytes) <= 0 {
@@ -215,7 +217,7 @@ func RoundTripperWithVMIdentity(ctx context.Context, wrapped http.RoundTripper, 
 }
 
 // ListPendingRequests issues a single request to the proxy to ask for the IDs of pending requests.
-func ListPendingRequests(client *http.Client, proxyHost, backendID string) ([]string, error) {
+func ListPendingRequests(client *http.Client, proxyHost, backendID string, metricHandler *metrics.MetricHandler) ([]string, error) {
 	proxyURL := proxyHost + PendingPath
 	proxyReq, err := http.NewRequest(http.MethodGet, proxyURL, nil)
 	if err != nil {
@@ -227,14 +229,15 @@ func ListPendingRequests(client *http.Client, proxyHost, backendID string) ([]st
 		return nil, fmt.Errorf("A proxy request failed: %q", err.Error())
 	}
 	defer proxyResp.Body.Close()
-	return parseRequestIDs(proxyResp)
+	return parseRequestIDs(proxyResp, metricHandler)
 }
 
-func parseRequestFromProxyResponse(backendID, requestID string, proxyResp *http.Response) (*ForwardedRequest, error) {
+func parseRequestFromProxyResponse(backendID, requestID string, proxyResp *http.Response, metricsHandler *metrics.MetricsHandler) (*ForwardedRequest, error) {
 	user := proxyResp.Header.Get(HeaderUserID)
 	startTimeStr := proxyResp.Header.Get(HeaderRequestStartTime)
 
 	if proxyResp.StatusCode != http.StatusOK {
+		metricsHandler.WriteMetric(metrics.ResponseCount, proxyResp.StatusCode)
 		return nil, fmt.Errorf("Error status while reading %q from the proxy", requestID)
 	}
 
@@ -259,7 +262,7 @@ func parseRequestFromProxyResponse(backendID, requestID string, proxyResp *http.
 // ReadRequest reads a forwarded client request from the inverting proxy.
 //
 // If the returned request is non-nil, then it is passed to the provided callback.
-func ReadRequest(client *http.Client, proxyHost, backendID, requestID string, callback RequestCallback) error {
+func ReadRequest(client *http.Client, proxyHost, backendID, requestID string, callback RequestCallback, metricHandler *metrics.MetricHandler) error {
 	proxyURL := proxyHost + RequestPath
 	proxyReq, err := http.NewRequest(http.MethodGet, proxyURL, nil)
 	if err != nil {
@@ -273,7 +276,7 @@ func ReadRequest(client *http.Client, proxyHost, backendID, requestID string, ca
 	}
 	defer proxyResp.Body.Close()
 
-	fr, err := parseRequestFromProxyResponse(backendID, requestID, proxyResp)
+	fr, err := parseRequestFromProxyResponse(backendID, requestID, proxyResp, metricHandler)
 	if err != nil {
 		return err
 	}
@@ -321,6 +324,8 @@ type ResponseForwarder struct {
 	//
 	// This is eventually returned to the caller of the Close method.
 	writeErrors chan error
+
+	metricHandler *metrics.MetricHandler
 }
 
 // NewResponseForwarder constructs a new ResponseForwarder that forwards to the
@@ -449,6 +454,7 @@ func (rf *ResponseForwarder) WriteHeader(code int) {
 			// we signal that issue to any remaining writers.
 			rf.response.Body.(*io.PipeReader).CloseWithError(err)
 		}
+		rf.metricHandler.WriteMetric(metrics.ResponseCount, rf.response.StatusCode)
 		close(rf.forwardingErrors)
 	}()
 }

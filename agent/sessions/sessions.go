@@ -54,12 +54,14 @@ import (
 	"github.com/golang/groupcache/lru"
 	"github.com/google/uuid"
 	"golang.org/x/net/publicsuffix"
+	"github.com/google/inverting-proxy/agent/metrics"
 )
 
 type sessionResponseWriter struct {
 	c             *Cache
 	sessionID     string
 	urlForCookies *url.URL
+	metricHandler *metrics.MetricHandler
 
 	wrapped     http.ResponseWriter
 	wroteHeader bool
@@ -71,7 +73,9 @@ func (w *sessionResponseWriter) Header() http.Header {
 
 func (w *sessionResponseWriter) Write(bs []byte) (int, error) {
 	if !w.wroteHeader {
-		w.WriteHeader(http.StatusOK)
+		statusCode := http.StatusOK
+		w.WriteHeader(statusCode)
+		w.metricHandler.WriteMetric(metrics.ResponseCount, statusCode)
 	}
 	return w.wrapped.Write(bs)
 }
@@ -114,6 +118,7 @@ func (w *sessionResponseWriter) WriteHeader(statusCode int) {
 type sessionHandler struct {
 	c       *Cache
 	wrapped http.Handler
+	metricHandler *metrics.MetricHandler
 }
 
 func (h *sessionHandler) extractSessionID(r *http.Request) string {
@@ -153,7 +158,9 @@ func (h *sessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		//
 		// This should not happen and represents an internal error in the session handling logic.
 		log.Printf("Failure reading the cookie jar for session %q: %v", sessionID, err)
-		http.Error(w, fmt.Sprintf("Internal error reading the session %q", sessionID), http.StatusInternalServerError)
+		statusCode := http.StatusInternalServerError
+		http.Error(w, fmt.Sprintf("Internal error reading the session %q", sessionID), statusCode)
+		h.metricHandler.WriteMetric(metrics.ResponseCount, statusCode)
 		return
 	}
 	cachedCookies := cachedCookieJar.Cookies(&urlForCookies)
@@ -163,18 +170,20 @@ func (h *sessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		sessionID:     sessionID,
 		urlForCookies: &urlForCookies,
 		wrapped:       w,
+		metricHandler: h.metricHandler,
 	}
 	h.wrapped.ServeHTTP(w, r)
 }
 
 // SessionHandler returns an instance of `http.Handler` that wraps the given handler and adds proxy-side session tracking.
-func (c *Cache) SessionHandler(wrapped http.Handler) http.Handler {
+func (c *Cache) SessionHandler(wrapped http.Handler, metricHandler *metrics.MetricHandler) http.Handler {
 	if c == nil {
 		return wrapped
 	}
 	return &sessionHandler{
 		c:       c,
 		wrapped: wrapped,
+		metricHandler: metricHandler,
 	}
 }
 

@@ -24,6 +24,8 @@ import (
 	"strings"
 	"text/template"
 	"time"
+
+	"github.com/google/inverting-proxy/agent/metrics"
 )
 
 const (
@@ -104,11 +106,12 @@ func isAlreadyFramed(r *http.Request) bool {
 }
 
 type bannerResponseWriter struct {
-	wrapped      http.ResponseWriter
-	bannerHTML   string
-	bannerHeight string
-	targetURL    *url.URL
-	favIconURL   string
+	wrapped       http.ResponseWriter
+	bannerHTML    string
+	bannerHeight  string
+	targetURL     *url.URL
+	favIconURL    string
+	metricHandler *metrics.MetricHandler
 
 	wroteHeader     bool
 	writeBytes      bool
@@ -167,6 +170,8 @@ func (w *bannerResponseWriter) getBanner(favIconLink string) ([]byte, error) {
 }
 
 func (w *bannerResponseWriter) WriteHeader(statusCode int) {
+	w.metricHandler.WriteMetric(metrics.ResponseCount, statusCode)
+
 	if w.wroteHeader {
 		return
 	}
@@ -187,12 +192,16 @@ func (w *bannerResponseWriter) WriteHeader(statusCode int) {
 	}
 	favIconLink, err := w.getFavIconLink()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		sc := http.StatusInternalServerError
+		http.Error(w, err.Error(), sc)
+		w.metricHandler.WriteMetric(metrics.ResponseCount, sc)
 		return
 	}
 	banner, e := w.getBanner(favIconLink)
 	if e != nil {
-		http.Error(w, e.Error(), http.StatusInternalServerError)
+		sc := http.StatusInternalServerError
+		http.Error(w, e.Error(), sc)
+		w.metricHandler.WriteMetric(metrics.ResponseCount, sc)
 		return
 	}
 
@@ -202,7 +211,9 @@ func (w *bannerResponseWriter) WriteHeader(statusCode int) {
 
 func (w *bannerResponseWriter) Write(bs []byte) (int, error) {
 	if !w.wroteHeader {
-		w.WriteHeader(http.StatusOK)
+		statusCode := http.StatusOK
+		w.WriteHeader(statusCode)
+		w.metricHandler.WriteMetric(metrics.ResponseCount, statusCode)
 	}
 	if !w.writeBytes {
 		return len(bs), nil
@@ -211,7 +222,7 @@ func (w *bannerResponseWriter) Write(bs []byte) (int, error) {
 }
 
 // Proxy builds an HTTP handler that proxies to a wrapped handler but injects the given HTML banner into every HTML response.
-func Proxy(ctx context.Context, wrapped http.Handler, bannerHTML, bannerHeight, favIconURL string) (http.Handler, error) {
+func Proxy(ctx context.Context, wrapped http.Handler, bannerHTML, bannerHeight, favIconURL string, metricHandler *metrics.MetricHandler) (http.Handler, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if !isHTMLRequest(r) {
@@ -225,6 +236,7 @@ func Proxy(ctx context.Context, wrapped http.Handler, bannerHTML, bannerHeight, 
 			targetURL:       r.URL,
 			isAlreadyFramed: isAlreadyFramed(r),
 			favIconURL:      favIconURL,
+			metricHandler:	 metricHandler
 		}
 		wrapped.ServeHTTP(w, r)
 	})
