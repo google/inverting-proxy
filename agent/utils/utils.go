@@ -232,7 +232,7 @@ func ListPendingRequests(client *http.Client, proxyHost, backendID string, metri
 	return parseRequestIDs(proxyResp, metricHandler)
 }
 
-func parseRequestFromProxyResponse(backendID, requestID string, proxyResp *http.Response, metricsHandler *metrics.MetricsHandler) (*ForwardedRequest, error) {
+func parseRequestFromProxyResponse(backendID, requestID string, proxyResp *http.Response, metricsHandler *metrics.MetricHandler) (*ForwardedRequest, error) {
 	user := proxyResp.Header.Get(HeaderUserID)
 	startTimeStr := proxyResp.Header.Get(HeaderRequestStartTime)
 

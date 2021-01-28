@@ -31,6 +31,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 
+	"github.com/google/inverting-proxy/agent/metrics"
 	"github.com/google/inverting-proxy/agent/websockets"
 )
 
@@ -56,8 +57,13 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failure parsing the address of the backend server: %v", err)
 	}
+	metricHandler, err := metrics.NewMetricHandler(context.Background(), "pekopeko-test", "fake-instance", "us-west1-a")
+        if err != nil {
+                log.Fatalf("Error: %v", err)
+        }
+
 	backendProxy := httputil.NewSingleHostReverseProxy(backendURL)
-	shimmingProxy, err := websockets.Proxy(context.Background(), backendProxy, backendURL.Host, *shimPath, true, *enableWebsocketInjection, func(h http.Handler) http.Handler { return h })
+	shimmingProxy, err := websockets.Proxy(context.Background(), backendProxy, backendURL.Host, *shimPath, true, *enableWebsocketInjection, func(h http.Handler, metricHandler *metrics.MetricHandler) http.Handler { return h }, metricHandler)
 	if err != nil {
 		log.Fatalf("Failure starting the websocket-shimming proxy: %v", err)
 	}

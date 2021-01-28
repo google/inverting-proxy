@@ -47,7 +47,7 @@ func NewMetricHandler(ctx context.Context, projectID, instanceID, instanceZone s
 	}, nil
 }
 
-func (h *MetricHandler) WriteMetric(metricType, statusCode int) error {
+func (h *MetricHandler) WriteMetric(metricType string, statusCode int) error {
 	responseCode := fmt.Sprintf("%v", statusCode)
 	responseClass := fmt.Sprintf("%sXX", responseCode[0:1])
         dataPoint := newDataPoint()

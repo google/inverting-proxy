@@ -301,7 +301,8 @@ func main() {
 	if *sessionCookieName != "" {
 		sessionLRU = sessions.NewCache(*sessionCookieName, *sessionCookieTimeout, *sessionCookieCacheLimit, *disableSSLForTest)
 	}
-	metricHandler, err := metrics.NewMetricHandler(ctx, "pekopeko-test", "fake-instance", "us-west1-a")
+	mh, err := metrics.NewMetricHandler(ctx, "pekopeko-test", "fake-instance", "us-west1-a")
+	metricHandler = mh
         if err != nil {
                 log.Fatalf("Error: %v", err)
         }

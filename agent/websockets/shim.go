@@ -33,6 +33,7 @@ import (
 	"text/template"
 
 	"context"
+	"github.com/google/inverting-proxy/agent/metrics"
 )
 
 const (
@@ -292,7 +293,7 @@ type sessionMessage struct {
 	Version int         `json:"v,omitempty"`
 }
 
-func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost bool, openWebsocketWrapper func(http.Handler) http.Handler, enableWebsocketInjection bool, metricHandler *metrics.MetricHandler) http.Handler {
+func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost bool, openWebsocketWrapper func(http.Handler, *metrics.MetricHandler) http.Handler, enableWebsocketInjection bool, metricHandler *metrics.MetricHandler) http.Handler {
 	var connections sync.Map
 	var sessionCount uint64
 	mux := http.NewServeMux()
@@ -341,7 +342,7 @@ func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost b
 		w.WriteHeader(statusCode)
 		metricHandler.WriteMetric(metrics.ResponseCount, statusCode)
 		w.Write(respBytes)
-	}))
+	}), metricHandler)
 	mux.HandleFunc(path.Join(shimPath, "open"), func(w http.ResponseWriter, r *http.Request) {
 		body, err := ioutil.ReadAll(r.Body)
 		if err != nil {
@@ -512,7 +513,7 @@ func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost b
 // openWebsocketWrapper is a http.Handler wrapper function that is invoked on websocket open requests after the original
 // targetURL of the request is restored. It must call the wrapped http.Handler with which it is created after it
 // is finished processing the request.
-func Proxy(ctx context.Context, wrapped http.Handler, host, shimPath string, rewriteHost, enableWebsocketInjection bool, openWebsocketWrapper func(wrapped http.Handler) http.Handler, metricHandler *metrics.MetricHandler) (http.Handler, error) {
+func Proxy(ctx context.Context, wrapped http.Handler, host, shimPath string, rewriteHost, enableWebsocketInjection bool, openWebsocketWrapper func(wrapped http.Handler, metricHandler *metrics.MetricHandler) http.Handler, metricHandler *metrics.MetricHandler) (http.Handler, error) {
 	mux := http.NewServeMux()
 	if shimPath != "" {
 		shimPath = path.Clean("/"+shimPath) + "/"
