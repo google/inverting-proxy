@@ -4,9 +4,9 @@ go 1.13
 
 require (
 	cloud.google.com/go v0.50.0
-	cloud.google.com/go/monitoring/apiv3 v0.74.0
 	github.com/golang/groupcache v0.0.0-20191027212112-611e8accdfc9
 	github.com/golang/protobuf/ptypes/timestamp v1.4.3
+	github.com/golang/protobuf v1.3.2
 	github.com/google/go-cmp v0.5.4
 	github.com/google/uuid v1.1.1
 	github.com/gorilla/websocket v1.4.1
@@ -14,8 +14,5 @@ require (
 	golang.org/x/oauth2 v0.0.0-20191202225959-858c2ad4c8b6
 	google.golang.org/api v0.15.0
 	google.golang.org/appengine v1.6.5
-	google.golang.org/api/option v0.36.0
-	google.golang.org/genproto/googleapis/api/metric v0.0.0-20210111234610-22ae2b108f89
-	google.golang.org/genproto/googleapis/api/monitoredres v0.0.0-20210111234610-22ae2b108f89
-	google.golang.org/genproto/googleapis/monitoring/v3 v0.0.0-20210111234610-22ae2b108f89
+	google.golang.org/genproto v0.0.0-20191216164720-4f79533eabd1
 )
