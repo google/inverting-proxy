@@ -62,6 +62,7 @@ var (
 	debug                = flag.Bool("debug", false, "Whether or not to print debug log messages")
 	disableSSLForTest    = flag.Bool("disable-ssl-for-test", false, "Disable requirements for SSL when running tests locally")
 	favIconURL           = flag.String("favicon-url", "", "URL of the favicon")
+	testServiceIdentity  = flag.String("test-service-identity", "", "Service identity, that will be used by the agent, when testing locally")
 	forwardUserID        = flag.Bool("forward-user-id", false, "Whether or not to include the ID (email address) of the end user in requests to the backend")
 	injectBanner         = flag.String("inject-banner", "", "HTML snippet to inject in served webpages")
 	bannerHeight         = flag.String("banner-height", "40px", "Height of the injected banner. This is ignored if no banner is set.")
@@ -128,6 +129,7 @@ func forwardRequest(client *http.Client, hostProxy http.Handler, request *utils.
 	if err != nil {
 		return fmt.Errorf("failed to create the response forwarder: %v", err)
 	}
+
 	hostProxy.ServeHTTP(responseForwarder, httpRequest)
 	if *debug {
 		log.Printf("Backend latency for request %s: %s\n", request.RequestID, time.Since(request.StartTime).String())
@@ -200,7 +202,13 @@ func getGoogleClient(ctx context.Context) (*http.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	client.Transport = utils.RoundTripperWithVMIdentity(ctx, client.Transport, *proxy, *disableGCEVM)
+
+	if *testServiceIdentity == "" {
+		client.Transport = utils.RoundTripperWithVMIdentity(ctx, client.Transport, *proxy, *disableGCEVM)
+	} else {
+		client.Transport = utils.RoundTripperWithTestIdentity(client.Transport, *testServiceIdentity)
+	}
+
 	client.Jar, err = cookiejar.New(&cookiejar.Options{
 		PublicSuffixList: publicsuffix.List,
 	})

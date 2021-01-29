@@ -214,6 +214,13 @@ func RoundTripperWithVMIdentity(ctx context.Context, wrapped http.RoundTripper, 
 	return transport
 }
 
+func RoundTripperWithTestIdentity(wrapped http.RoundTripper, testID string) http.RoundTripper {
+	return &vmTransport{
+		wrapped: wrapped,
+		currID:  testID,
+	}
+}
+
 // ListPendingRequests issues a single request to the proxy to ask for the IDs of pending requests.
 func ListPendingRequests(client *http.Client, proxyHost, backendID string) ([]string, error) {
 	proxyURL := proxyHost + PendingPath
