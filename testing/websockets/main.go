@@ -18,7 +18,7 @@ limitations under the License.
 // manually test changes to the code in the agent/websockets package
 //
 // Example usage:
-//   go build -o ~/bin/test-websocket-sever testing/websockets/main.go
+//   go build -o ~/bin/test-websocket-server testing/websockets/main.go
 //   ~/bin/test-websocket-server --port 8081 --backend http://localhost:8082
 package main
 
@@ -56,11 +56,11 @@ func main() {
 	backendProxy := httputil.NewSingleHostReverseProxy(backendURL)
 	shimmingProxy, err := websockets.Proxy(context.Background(), backendProxy, backendURL.Host, *shimPath, true, func(h http.Handler) http.Handler { return h })
 	if err != nil {
-		log.Fatal("Failure starting the websocket-shimming proxy: %v", err)
+		log.Fatalf("Failure starting the websocket-shimming proxy: %v", err)
 	}
 	shimFunc, err := websockets.ShimBody(*shimPath)
 	if err != nil {
-		log.Fatal("Failure setting up shim injection code: %v", err)
+		log.Fatalf("Failure setting up shim injection code: %v", err)
 	}
 	backendProxy.ModifyResponse = shimFunc
 
