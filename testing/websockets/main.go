@@ -42,6 +42,9 @@ var (
 	enableWebsocketInjection = flag.Bool("enable-websocket-injection", false, "Enables websockets message injection. "+
 		"Websocket message injection will inject all headers from the HTTP request to /data and inject them "+
 		"into JSON-serialized websocket messages at the JSONPath `resource.headers`")
+	projectID    = flag.String("project-id", "", "Name of the GCP project id")
+	instanceID   = flag.String("instance-id", "", "Name of the notebook instance")
+	instanceZone = flag.String("zone", "", "Location of the notebook instance")
 	metricDomain = flag.String("metric-domain", "", "Domain under which to write metrics eg. notebooks.googleapis.com")
 )
 

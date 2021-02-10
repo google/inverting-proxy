@@ -83,6 +83,9 @@ var (
 	rewriteWebsocketHost    = flag.Bool("rewrite-websocket-host", false, "Whether to rewrite the Host header to the original request when shimming a websocket connection")
 	stripCredentials        = flag.Bool("strip-credentials", false, "Whether to strip the Authorization header from all requests.")
 
+	projectID		= flag.String("project-id", "", "Name of the GCP project id")
+	instanceID		= flag.String("instance-id", "", "Name of the notebook instance")
+	instanceZone		= flag.String("zone", "", "Location of the notebook instance")
 	metricDomain		= flag.String("metric-domain", "", "Domain under which to write metrics eg. notebooks.googleapis.com")
 
 	sessionLRU *sessions.Cache
@@ -303,7 +306,7 @@ func main() {
 	if *sessionCookieName != "" {
 		sessionLRU = sessions.NewCache(*sessionCookieName, *sessionCookieTimeout, *sessionCookieCacheLimit, *disableSSLForTest)
 	}
-	mh, err := metrics.NewMetricHandler(ctx, "pekopeko-test", "fake-instance", "us-west1-a", *metricDomain)
+	mh, err := metrics.NewMetricHandler(ctx, *projectID, *instanceID, *instanceZone, *metricDomain)
 	metricHandler = mh
         if err != nil {
                 log.Printf("Unable to create metric handler: %v", err)
