@@ -17,8 +17,6 @@ import (
 const (
 	samplePeriod	= 60 * time.Second
         endpoint	= "staging-monitoring.sandbox.googleapis.com:443"
-        ResponseCount	= "notebooks.googleapis.com/instance/proxy_agent/response_count"
-        CrashCount	= "notebooks.googleapis.com/instance/proxy_agent/crash_count"
 )
 
 var startTime time.Time
@@ -28,12 +26,13 @@ type MetricHandler struct {
 	projectID string
 	instanceID string
 	instanceZone string
+	metricDomain string
 	ctx context.Context
 	client *monitoring.MetricClient
 }
 
 // NewMetricHandler instantiates a metric client for the purpose of writing metrics to cloud monarch
-func NewMetricHandler(ctx context.Context, projectID, instanceID, instanceZone string) (*MetricHandler, error) {
+func NewMetricHandler(ctx context.Context, projectID, instanceID, instanceZone, metricDomain string) (*MetricHandler, error) {
 	log.Printf("NewMetricHandler|instantiating metric handler")
 	client, err := monitoring.NewMetricClient(
                 ctx,
@@ -47,9 +46,10 @@ func NewMetricHandler(ctx context.Context, projectID, instanceID, instanceZone s
 	codeCount = make(map[string]int64)
 
 	return &MetricHandler{
-		projectID:	"pekopeko-test",
-		instanceID:	"fake-instance",
-		instanceZone:	"us-west1-a",
+		projectID:	projectID,
+		instanceID:	instanceID,
+		instanceZone:	instanceZone,
+		metricDomain:	metricDomain,
 		ctx:		ctx,
 		client:		client,
 	}, nil
@@ -59,11 +59,18 @@ func (h *MetricHandler) WriteMetric(metricType string, statusCode int) error {
 	if h == nil {
 		return nil
 	}
-	if metricType == ResponseCount {
+	if metricType == h.GetResponseCountMetricType() {
 		err := h.writeResponseCodeMetric(statusCode)
 		return err
 	}
 	return nil
+}
+
+func (h *MetricHandler) GetResponseCountMetricType() string {
+	if h == nil {
+		return ""
+	}
+	return fmt.Sprintf("%s/instance/proxy_agent/response_count", h.metricDomain)
 }
 
 // writeResponseCodeMetric will gather response codes and write to cloud monarch once sample period is over
@@ -86,7 +93,7 @@ func (h *MetricHandler) writeResponseCodeMetric(statusCode int) error {
 	log.Printf("WriteMetric|attempting to write metrics at time: %v\n", time.Now())
 	for responseCode, count := range codeCount {
 		responseClass := fmt.Sprintf("%sXX", responseCode[0:1])
-		timeSeries := h.newTimeSeries(ResponseCount, responseCode, responseClass, newDataPoint(count))
+		timeSeries := h.newTimeSeries(h.GetResponseCountMetricType(), responseCode, responseClass, newDataPoint(count))
 
 		log.Printf("got %v occurances of %s response code\n", count, responseCode)
 		log.Printf("%v\n\n", timeSeries)

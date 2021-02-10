@@ -42,6 +42,7 @@ var (
 	enableWebsocketInjection = flag.Bool("enable-websocket-injection", false, "Enables websockets message injection. "+
 		"Websocket message injection will inject all headers from the HTTP request to /data and inject them "+
 		"into JSON-serialized websocket messages at the JSONPath `resource.headers`")
+	metricDomain = flag.String("metric-domain", "", "Domain under which to write metrics eg. notebooks.googleapis.com")
 )
 
 func main() {
@@ -57,10 +58,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failure parsing the address of the backend server: %v", err)
 	}
-	metricHandler, err := metrics.NewMetricHandler(context.Background(), "pekopeko-test", "fake-instance", "us-west1-a")
-        if err != nil {
+	metricHandler, err := metrics.NewMetricHandler(context.Background(), "pekopeko-test", "fake-instance", "us-west1-a", *metricDomain)
+	if err != nil {
 		log.Printf("Unable to create metric handler: %v", err)
-        }
+	}
 
 	backendProxy := httputil.NewSingleHostReverseProxy(backendURL)
 	shimmingProxy, err := websockets.Proxy(context.Background(), backendProxy, backendURL.Host, *shimPath, true, *enableWebsocketInjection, func(h http.Handler, metricHandler *metrics.MetricHandler) http.Handler { return h }, metricHandler)
