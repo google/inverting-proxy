@@ -59,7 +59,7 @@ func main() {
 	}
 	metricHandler, err := metrics.NewMetricHandler(context.Background(), "pekopeko-test", "fake-instance", "us-west1-a")
         if err != nil {
-                log.Fatalf("Error: %v", err)
+		log.Printf("Unable to create metric handler: %v", err)
         }
 
 	backendProxy := httputil.NewSingleHostReverseProxy(backendURL)

@@ -56,6 +56,9 @@ func NewMetricHandler(ctx context.Context, projectID, instanceID, instanceZone s
 }
 
 func (h *MetricHandler) WriteMetric(metricType string, statusCode int) error {
+	if h == nil {
+		return nil
+	}
 	if metricType == ResponseCount {
 		err := h.writeResponseCodeMetric(statusCode)
 		return err

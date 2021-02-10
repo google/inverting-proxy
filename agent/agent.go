@@ -304,7 +304,7 @@ func main() {
 	mh, err := metrics.NewMetricHandler(ctx, "pekopeko-test", "fake-instance", "us-west1-a")
 	metricHandler = mh
         if err != nil {
-                log.Fatalf("Error: %v", err)
+                log.Printf("Unable to create metric handler: %v", err)
         }
 
 	waitForHealthy()
