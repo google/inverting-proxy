@@ -96,7 +96,7 @@ func isAlreadyFramed(r *http.Request) bool {
 	}
 	if referer := r.Header.Get(refererHeader); referer != "" {
 		refererURL, err := url.Parse(referer)
-		if err == nil && refererURL.Host == r.Host && refererURL.Path == r.URL.Path {
+		if err == nil && refererURL.Host == r.Host {
 			return true
 		}
 	}
