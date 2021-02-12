@@ -61,8 +61,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failure parsing the address of the backend server: %v", err)
 	}
-	metricHandler, err := metrics.NewMetricHandler(context.Background(), "pekopeko-test", "fake-instance", "us-west1-a", *metricDomain)
-	if err != nil {
+	metricHandler, err := metrics.NewMetricHandler(context.Background(), *projectID, *instanceID, *instanceZone, *metricDomain)
+        if err != nil {
 		log.Printf("Unable to create metric handler: %v", err)
 	}
 
