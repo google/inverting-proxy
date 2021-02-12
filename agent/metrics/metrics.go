@@ -20,6 +20,7 @@ import (
         "time"
 
 	apioption "google.golang.org/api/option"
+	gax "github.com/googleapis/gax-go/v2"
         googlepb "github.com/golang/protobuf/ptypes/timestamp"
         metricpb "google.golang.org/genproto/googleapis/api/metric"
         monitoring "cloud.google.com/go/monitoring/apiv3"
@@ -35,13 +36,34 @@ const (
 var startTime time.Time
 var codeCount map[string]int64
 
+// metricClient is a client for interacting with Cloud Monitoring API.
+type metricClient interface {
+	CreateTimeSeries(ctx context.Context, req *monitoringpb.CreateTimeSeriesRequest, opts ...gax.CallOption) error
+}
+
+// fakeMetricClient is a stub of MetricClient for the purpose of testing
+type fakeMetricClient struct {
+	Requests []*monitoringpb.CreateTimeSeriesRequest
+}
+
+func (f *fakeMetricClient) CreateTimeSeries(ctx context.Context, req *monitoringpb.CreateTimeSeriesRequest, opts ...gax.CallOption) error {
+	f.Requests = append(f.Requests, req)
+	return nil
+}
+
 type MetricHandler struct {
 	projectID string
 	instanceID string
 	instanceZone string
 	metricDomain string
 	ctx context.Context
-	client *monitoring.MetricClient
+	client metricClient
+}
+
+// NewFakeMetricHandler instantiates a fake metric client for the purpose of testing
+func NewFakeMetricHandler(ctx context.Context, projectID, instanceID, instanceZone, metricDomain string) (*MetricHandler, error) {
+	client := fakeMetricClient{}
+	return newMetricHandlerHelper(ctx, projectID, instanceID, instanceZone, metricDomain, &client)
 }
 
 // NewMetricHandler instantiates a metric client for the purpose of writing metrics to cloud monarch
@@ -55,6 +77,27 @@ func NewMetricHandler(ctx context.Context, projectID, instanceID, instanceZone, 
 		log.Fatalf("Failed to create client: %v", err)
 		return nil, err
 	}
+	return newMetricHandlerHelper(ctx, projectID, instanceID, instanceZone, metricDomain, client)
+}
+
+func newMetricHandlerHelper(ctx context.Context, projectID, instanceID, instanceZone, metricDomain string, client metricClient) (*MetricHandler, error) {
+	if projectID == "" {
+		err := fmt.Errorf("Failed to create metric handler: missing projectID")
+		return nil, err
+	}
+	if instanceID == "" {
+		err := fmt.Errorf("Failed to create metric handler: missing instanceID")
+		return nil, err
+	}
+	if instanceZone == "" {
+		err := fmt.Errorf("Failed to create metric handler: missing instanceZone")
+		return nil, err
+	}
+	if metricDomain == "" {
+		err := fmt.Errorf("Failed to create metric handler: missing metricDomain")
+		return nil, err
+	}
+
 	startTime = time.Now()
 	codeCount = make(map[string]int64)
 
