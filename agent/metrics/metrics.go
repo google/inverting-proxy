@@ -30,7 +30,7 @@ import (
 
 const (
 	samplePeriod	= 60 * time.Second
-        endpoint	= "staging-monitoring.sandbox.googleapis.com:443"
+        endpoint	= "monitoring.sandbox.googleapis.com:443"
 )
 
 var startTime time.Time
