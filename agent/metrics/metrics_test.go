@@ -19,6 +19,22 @@ import (
 	"testing"
 )
 
+// fakeMetricClient is a stub of MetricClient for the purpose of testing
+type fakeMetricClient struct {
+        Requests []*monitoringpb.CreateTimeSeriesRequest
+}
+
+func (f *fakeMetricClient) CreateTimeSeries(ctx context.Context, req *monitoringpb.CreateTimeSeriesRequest, opts ...gax.CallOption) error {
+        f.Requests = append(f.Requests, req)
+        return nil
+}
+
+// NewFakeMetricHandler instantiates a fake metric client for the purpose of testing
+func NewFakeMetricHandler(ctx context.Context, projectID, instanceID, instanceZone, metricDomain string) (*MetricHandler, error) {
+        client := fakeMetricClient{}
+        return newMetricHandlerHelper(ctx, projectID, instanceID, instanceZone, metricDomain, &client)
+}
+
 func TestNewMetricHandler(t *testing.T) {
 	c := context.Background()
 	testCases := []struct {

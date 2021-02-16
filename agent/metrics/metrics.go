@@ -41,16 +41,6 @@ type metricClient interface {
 	CreateTimeSeries(ctx context.Context, req *monitoringpb.CreateTimeSeriesRequest, opts ...gax.CallOption) error
 }
 
-// fakeMetricClient is a stub of MetricClient for the purpose of testing
-type fakeMetricClient struct {
-	Requests []*monitoringpb.CreateTimeSeriesRequest
-}
-
-func (f *fakeMetricClient) CreateTimeSeries(ctx context.Context, req *monitoringpb.CreateTimeSeriesRequest, opts ...gax.CallOption) error {
-	f.Requests = append(f.Requests, req)
-	return nil
-}
-
 type MetricHandler struct {
 	projectID    string
 	instanceID   string
@@ -58,12 +48,6 @@ type MetricHandler struct {
 	metricDomain string
 	ctx          context.Context
 	client       metricClient
-}
-
-// NewFakeMetricHandler instantiates a fake metric client for the purpose of testing
-func NewFakeMetricHandler(ctx context.Context, projectID, instanceID, instanceZone, metricDomain string) (*MetricHandler, error) {
-	client := fakeMetricClient{}
-	return newMetricHandlerHelper(ctx, projectID, instanceID, instanceZone, metricDomain, &client)
 }
 
 // NewMetricHandler instantiates a metric client for the purpose of writing metrics to cloud monarch
