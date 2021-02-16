@@ -18,6 +18,8 @@ package websockets
 
 import (
 	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -27,6 +29,8 @@ import (
 
 	"github.com/gorilla/websocket"
 )
+
+var websocketShimInjectedHeadersPath = []string{"resource", "headers"}
 
 type message struct {
 	Type int
@@ -182,7 +186,7 @@ func (conn *Connection) Close() {
 // SendClientMessage sends the given message to the websocket server.
 //
 // The returned error value is non-nill if the connection has been closed.
-func (conn *Connection) SendClientMessage(msg interface{}) error {
+func (conn *Connection) SendClientMessage(msg interface{}, injectionEnabled bool, injectedHeaders map[string]string) error {
 	var clientMessage *message
 	if textMsg, ok := msg.(string); ok {
 		clientMessage = &message{
@@ -211,6 +215,14 @@ func (conn *Connection) SendClientMessage(msg interface{}) error {
 	} else {
 		log.Printf("unexpected websocket-shim message type: %+v\n", msg)
 		return fmt.Errorf("unexpected websocket-shim message type: %+v", msg)
+	}
+	if injectionEnabled {
+		injectedMsg, err := injectWebsocketMessage(clientMessage, websocketShimInjectedHeadersPath, injectedHeaders)
+		if err != nil {
+			log.Printf("Failed to inject websocket message: %v", err)
+		} else {
+			clientMessage = injectedMsg
+		}
 	}
 	select {
 	case <-conn.ctx.Done():
@@ -251,4 +263,45 @@ func (conn *Connection) ReadServerMessages() ([]interface{}, error) {
 	case <-time.After(time.Second * 20):
 		return nil, nil
 	}
+}
+
+// injectWebsocketMessage injects a shim header value into a single websocket message in-place.
+// Returns a pointer to a new copy of the struct on success.
+func injectWebsocketMessage(msg *message, injectionPath []string, injectionValues map[string]string) (*message, error) {
+	if msg == nil {
+		return nil, errors.New("unexpected nil message")
+	}
+	if injectionValues == nil || len(injectionValues) == 0 {
+		return msg, nil
+	}
+	// Deserialize the websocket message into a JSON object.
+	var origJSONComponent map[string]interface{}
+	err := json.Unmarshal(msg.Data, &origJSONComponent)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal as json message: %v", err)
+	}
+	var currJSONComponent map[string]interface{}
+	var ok bool
+	currJSONComponent = origJSONComponent
+	for _, pathComponent := range injectionPath {
+		currJSONComponent, ok = currJSONComponent[pathComponent].(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("failed to inject value due to unexpected message json format")
+		}
+	}
+
+	// Inject the header values into the specified key. Do not overwrite existing header values.
+	for key, value := range injectionValues {
+		if _, ok := currJSONComponent[key]; !ok {
+			currJSONComponent[key] = value
+		}
+	}
+
+	// Reserialize the websocket message.
+	newMsgBytes, err := json.Marshal(&origJSONComponent)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal json as bytes: %v", err)
+	}
+
+	return &message{Type: msg.Type, Data: newMsgBytes}, nil
 }
