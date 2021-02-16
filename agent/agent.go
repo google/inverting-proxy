@@ -50,8 +50,9 @@ import (
 )
 
 const (
-	requestCacheLimit = 1000
-	emailScope        = "email"
+	requestCacheLimit   = 1000
+	emailScope          = "email"
+	headerAuthorization = "Authorization"
 )
 
 var (
@@ -76,6 +77,7 @@ var (
 	sessionCookieTimeout    = flag.Duration("session-cookie-timeout", 12*time.Hour, "Expiration flag for the session cookie")
 	sessionCookieCacheLimit = flag.Int("session-cookie-cache-limit", 1000, "Upper bound on the number of concurrent sessions that can be tracked by the agent")
 	rewriteWebsocketHost    = flag.Bool("rewrite-websocket-host", false, "Whether to rewrite the Host header to the original request when shimming a websocket connection")
+	stripCredentials        = flag.Bool("strip-credentials", false, "Whether to strip the Authorization header from all requests.")
 
 	sessionLRU *sessions.Cache
 )
@@ -123,6 +125,9 @@ func forwardRequest(client *http.Client, hostProxy http.Handler, request *utils.
 	httpRequest := request.Contents
 	if *forwardUserID {
 		httpRequest.Header.Add(utils.HeaderUserID, request.User)
+	}
+	if *stripCredentials {
+		httpRequest.Header.Del(headerAuthorization)
 	}
 	responseForwarder, err := utils.NewResponseForwarder(client, *proxy, request.BackendID, request.RequestID)
 	if err != nil {
