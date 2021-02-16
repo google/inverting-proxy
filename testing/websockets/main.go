@@ -62,7 +62,7 @@ func main() {
 		log.Fatalf("Failure parsing the address of the backend server: %v", err)
 	}
 	metricHandler, err := metrics.NewMetricHandler(context.Background(), *projectID, *instanceID, *instanceZone, *metricDomain)
-        if err != nil {
+	if err != nil {
 		log.Printf("Unable to create metric handler: %v", err)
 	}
 

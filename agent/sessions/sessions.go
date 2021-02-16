@@ -52,9 +52,9 @@ import (
 	"time"
 
 	"github.com/golang/groupcache/lru"
+	"github.com/google/inverting-proxy/agent/metrics"
 	"github.com/google/uuid"
 	"golang.org/x/net/publicsuffix"
-	"github.com/google/inverting-proxy/agent/metrics"
 )
 
 type sessionResponseWriter struct {
@@ -116,8 +116,8 @@ func (w *sessionResponseWriter) WriteHeader(statusCode int) {
 }
 
 type sessionHandler struct {
-	c       *Cache
-	wrapped http.Handler
+	c             *Cache
+	wrapped       http.Handler
 	metricHandler *metrics.MetricHandler
 }
 
@@ -181,8 +181,8 @@ func (c *Cache) SessionHandler(wrapped http.Handler, metricHandler *metrics.Metr
 		return wrapped
 	}
 	return &sessionHandler{
-		c:       c,
-		wrapped: wrapped,
+		c:             c,
+		wrapped:       wrapped,
 		metricHandler: metricHandler,
 	}
 }

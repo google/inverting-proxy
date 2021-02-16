@@ -236,7 +236,7 @@ func Proxy(ctx context.Context, wrapped http.Handler, bannerHTML, bannerHeight, 
 			targetURL:       r.URL,
 			isAlreadyFramed: isAlreadyFramed(r),
 			favIconURL:      favIconURL,
-			metricHandler:	 metricHandler,
+			metricHandler:   metricHandler,
 		}
 		wrapped.ServeHTTP(w, r)
 	})

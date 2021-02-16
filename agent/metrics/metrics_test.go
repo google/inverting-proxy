@@ -22,24 +22,24 @@ import (
 func TestNewMetricHandler(t *testing.T) {
 	c := context.Background()
 	testCases := []struct {
-		projectID string
-		instanceID string
+		projectID    string
+		instanceID   string
 		instanceZone string
 		metricDomain string
-		want *MetricHandler
+		want         *MetricHandler
 	}{
 		{
-			projectID: "fake-project",
-			instanceID: "fake-instance",
+			projectID:    "fake-project",
+			instanceID:   "fake-instance",
 			instanceZone: "fake-zone",
 			metricDomain: "fake-domain.googleapis.com",
 			want: &MetricHandler{
-				projectID: "fake-project",
-				instanceID: "fake-instance",
+				projectID:    "fake-project",
+				instanceID:   "fake-instance",
 				instanceZone: "fake-zone",
 				metricDomain: "fake-domain.googleapis.com",
-				ctx: c,
-				client: &fakeMetricClient{},
+				ctx:          c,
+				client:       &fakeMetricClient{},
 			},
 		},
 	}
@@ -68,39 +68,39 @@ func TestNewMetricHandler(t *testing.T) {
 func TestNewMetricHandler_MissingArgs(t *testing.T) {
 	c := context.Background()
 	testCases := []struct {
-		projectID string
-		instanceID string
+		projectID    string
+		instanceID   string
 		instanceZone string
 		metricDomain string
-		err error
+		err          error
 	}{
 		{
-			projectID: "",
-			instanceID: "",
+			projectID:    "",
+			instanceID:   "",
 			instanceZone: "",
 			metricDomain: "",
-			err: fmt.Errorf("Failed to create metric handler: missing projectID"),
+			err:          fmt.Errorf("Failed to create metric handler: missing projectID"),
 		},
 		{
-			projectID: "fake-project",
-			instanceID: "",
+			projectID:    "fake-project",
+			instanceID:   "",
 			instanceZone: "",
 			metricDomain: "",
-			err: fmt.Errorf("Failed to create metric handler: missing instanceID"),
+			err:          fmt.Errorf("Failed to create metric handler: missing instanceID"),
 		},
 		{
-			projectID: "fake-project",
-			instanceID: "fake-instance",
+			projectID:    "fake-project",
+			instanceID:   "fake-instance",
 			instanceZone: "",
 			metricDomain: "",
-			err: fmt.Errorf("Failed to create metric handler: missing instanceZone"),
+			err:          fmt.Errorf("Failed to create metric handler: missing instanceZone"),
 		},
 		{
-			projectID: "fake-project",
-			instanceID: "fake-instance",
+			projectID:    "fake-project",
+			instanceID:   "fake-instance",
 			instanceZone: "fake-zone",
 			metricDomain: "",
-			err: fmt.Errorf("Failed to create metric handler: missing metricDomain"),
+			err:          fmt.Errorf("Failed to create metric handler: missing metricDomain"),
 		},
 	}
 
@@ -113,14 +113,14 @@ func TestNewMetricHandler_MissingArgs(t *testing.T) {
 	}
 }
 
-func TestGetResponseCountMetricType_Empty(t *testing.T){
+func TestGetResponseCountMetricType_Empty(t *testing.T) {
 	var metricHandler *MetricHandler
 	if res := metricHandler.GetResponseCountMetricType(); res != "" {
 		t.Errorf("GetResponseCountMetricType(): got: %v, want: ''", res)
 	}
 }
 
-func TestWriteMetric_Empty(t *testing.T){
+func TestWriteMetric_Empty(t *testing.T) {
 	var metricHandler *MetricHandler
 	if res := metricHandler.WriteMetric(metricHandler.GetResponseCountMetricType(), 200); res != nil {
 		t.Errorf("WriteMetric(): got: %v, want: %v", res, nil)

@@ -14,23 +14,23 @@ limitations under the License.
 package metrics
 
 import (
-        "context"
-        "fmt"
-        "log"
-        "time"
+	"context"
+	"fmt"
+	"log"
+	"time"
 
-	apioption "google.golang.org/api/option"
+	monitoring "cloud.google.com/go/monitoring/apiv3"
+	googlepb "github.com/golang/protobuf/ptypes/timestamp"
 	gax "github.com/googleapis/gax-go/v2"
-        googlepb "github.com/golang/protobuf/ptypes/timestamp"
-        metricpb "google.golang.org/genproto/googleapis/api/metric"
-        monitoring "cloud.google.com/go/monitoring/apiv3"
-        monitoringpb "google.golang.org/genproto/googleapis/monitoring/v3"
-        monitoredrespb "google.golang.org/genproto/googleapis/api/monitoredres"
+	apioption "google.golang.org/api/option"
+	metricpb "google.golang.org/genproto/googleapis/api/metric"
+	monitoredrespb "google.golang.org/genproto/googleapis/api/monitoredres"
+	monitoringpb "google.golang.org/genproto/googleapis/monitoring/v3"
 )
 
 const (
-	samplePeriod	= 60 * time.Second
-        endpoint	= "monitoring.sandbox.googleapis.com:443"
+	samplePeriod = 60 * time.Second
+	endpoint     = "monitoring.sandbox.googleapis.com:443"
 )
 
 var startTime time.Time
@@ -52,12 +52,12 @@ func (f *fakeMetricClient) CreateTimeSeries(ctx context.Context, req *monitoring
 }
 
 type MetricHandler struct {
-	projectID string
-	instanceID string
+	projectID    string
+	instanceID   string
 	instanceZone string
 	metricDomain string
-	ctx context.Context
-	client metricClient
+	ctx          context.Context
+	client       metricClient
 }
 
 // NewFakeMetricHandler instantiates a fake metric client for the purpose of testing
@@ -70,9 +70,9 @@ func NewFakeMetricHandler(ctx context.Context, projectID, instanceID, instanceZo
 func NewMetricHandler(ctx context.Context, projectID, instanceID, instanceZone, metricDomain string) (*MetricHandler, error) {
 	log.Printf("NewMetricHandler|instantiating metric handler")
 	client, err := monitoring.NewMetricClient(
-                ctx,
-                apioption.WithEndpoint(endpoint),
-        )
+		ctx,
+		apioption.WithEndpoint(endpoint),
+	)
 	if err != nil {
 		log.Fatalf("Failed to create client: %v", err)
 		return nil, err
@@ -102,12 +102,12 @@ func newMetricHandlerHelper(ctx context.Context, projectID, instanceID, instance
 	codeCount = make(map[string]int64)
 
 	return &MetricHandler{
-		projectID:	projectID,
-		instanceID:	instanceID,
-		instanceZone:	instanceZone,
-		metricDomain:	metricDomain,
-		ctx:		ctx,
-		client:		client,
+		projectID:    projectID,
+		instanceID:   instanceID,
+		instanceZone: instanceZone,
+		metricDomain: metricDomain,
+		ctx:          ctx,
+		client:       client,
 	}, nil
 }
 
@@ -155,7 +155,7 @@ func (h *MetricHandler) writeResponseCodeMetric(statusCode int) error {
 		log.Printf("%v\n\n", timeSeries)
 
 		if err := h.client.CreateTimeSeries(h.ctx, &monitoringpb.CreateTimeSeriesRequest{
-			Name: monitoring.MetricProjectPath(h.projectID),
+			Name:       monitoring.MetricProjectPath(h.projectID),
 			TimeSeries: []*monitoringpb.TimeSeries{timeSeries},
 		}); err != nil {
 			log.Println("Failed to write time series data: ", err)
@@ -172,11 +172,11 @@ func (h *MetricHandler) writeResponseCodeMetric(statusCode int) error {
 
 // newTimeSeries creates and returns a new time series
 func (h *MetricHandler) newTimeSeries(metricType, responseCode, responseClass string, dataPoint *monitoringpb.Point) *monitoringpb.TimeSeries {
-        return &monitoringpb.TimeSeries{
+	return &monitoringpb.TimeSeries{
 		Metric: &metricpb.Metric{
 			Type: metricType,
 			Labels: map[string]string{
-				"response_code": responseCode,
+				"response_code":       responseCode,
 				"response_code_class": responseClass,
 			},
 		},
@@ -184,31 +184,30 @@ func (h *MetricHandler) newTimeSeries(metricType, responseCode, responseClass st
 			Type: "gce_instance",
 			Labels: map[string]string{
 				"instance_id": h.instanceID,
-				"zone": h.instanceZone,
+				"zone":        h.instanceZone,
 			},
 		},
 		Points: []*monitoringpb.Point{
 			dataPoint,
 		},
-        }
+	}
 }
 
 // newDataPoint creates and returns a new data point
 func newDataPoint(count int64) *monitoringpb.Point {
-        return &monitoringpb.Point{
-                Interval: &monitoringpb.TimeInterval{
-                        StartTime: &googlepb.Timestamp{
-                                Seconds: time.Now().Unix(),
-                        },
-                        EndTime: &googlepb.Timestamp{
-                                Seconds: time.Now().Unix()+1,
-                        },
-                },
-                Value: &monitoringpb.TypedValue{
-                        Value: &monitoringpb.TypedValue_Int64Value{
-                                Int64Value: count,
-                        },
-                },
-        }
+	return &monitoringpb.Point{
+		Interval: &monitoringpb.TimeInterval{
+			StartTime: &googlepb.Timestamp{
+				Seconds: time.Now().Unix(),
+			},
+			EndTime: &googlepb.Timestamp{
+				Seconds: time.Now().Unix() + 1,
+			},
+		},
+		Value: &monitoringpb.TypedValue{
+			Value: &monitoringpb.TypedValue_Int64Value{
+				Int64Value: count,
+			},
+		},
+	}
 }
-
