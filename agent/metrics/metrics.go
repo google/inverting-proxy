@@ -33,6 +33,13 @@ const (
 	samplePeriod = 60 * time.Second
 )
 
+var (
+	responseCountResourceKeyToFlagName = map[string]string{
+		"instance_id": "instance-id",
+		"zone":        "instance-zone",
+	}
+)
+
 var startTime time.Time
 var codeCount map[string]int64
 
@@ -42,16 +49,16 @@ type metricClient interface {
 }
 
 type MetricHandler struct {
-	projectID    string
-	instanceID   string
-	instanceZone string
-	metricDomain string
-	ctx          context.Context
-	client       metricClient
+	projectID      string
+	metricDomain   string
+	resourceType   string
+	resourceLabels *map[string]string
+	ctx            context.Context
+	client         metricClient
 }
 
 // NewMetricHandler instantiates a metric client for the purpose of writing metrics to cloud monarch
-func NewMetricHandler(ctx context.Context, projectID, monitoringKeyValues, metricDomain, endpoint string) (*MetricHandler, error) {
+func NewMetricHandler(ctx context.Context, projectID, resourceType, resourceKeyValues, metricDomain, endpoint string) (*MetricHandler, error) {
 	log.Printf("NewMetricHandler|instantiating metric handler")
 	client, err := monitoring.NewMetricClient(
 		ctx,
@@ -61,24 +68,12 @@ func NewMetricHandler(ctx context.Context, projectID, monitoringKeyValues, metri
 		log.Fatalf("Failed to create client: %v", err)
 		return nil, err
 	}
-	return newMetricHandlerHelper(ctx, projectID, monitoringKeyValues, metricDomain, client)
+	return newMetricHandlerHelper(ctx, projectID, resourceType, resourceKeyValues, metricDomain, client)
 }
 
-func newMetricHandlerHelper(ctx context.Context, projectID, monitoringKeyValues, metricDomain string, client metricClient) (*MetricHandler, error) {
-	instanceID, instanceZone, err := parseMonitoringKeyValues(monitoringKeyValues)
-	if err != nil {
-		return nil, err
-	}
+func newMetricHandlerHelper(ctx context.Context, projectID, resourceType, resourceKeyValues, metricDomain string, client metricClient) (*MetricHandler, error) {
 	if projectID == "" {
 		err := fmt.Errorf("Failed to create metric handler: missing projectID")
-		return nil, err
-	}
-	if instanceID == "" {
-		err := fmt.Errorf("Failed to create metric handler: missing instanceID")
-		return nil, err
-	}
-	if instanceZone == "" {
-		err := fmt.Errorf("Failed to create metric handler: missing instanceZone")
 		return nil, err
 	}
 	if metricDomain == "" {
@@ -86,40 +81,74 @@ func newMetricHandlerHelper(ctx context.Context, projectID, monitoringKeyValues,
 		return nil, err
 	}
 
+	var resourceLabels *map[string]string
+	if resourceType == "" {
+		err := fmt.Errorf("Failed to create metric handler: missing resourceType")
+		return nil, err
+	}
+	if resourceType == "gce_instance" {
+		res, err := parseGCEResourceLabels(resourceKeyValues)
+		if err != nil {
+			return nil, err
+		}
+		resourceLabels = res
+	} else {
+		err := fmt.Errorf("Failed to create metric handler: unknown resource type %v", resourceType)
+		return nil, err
+	}
+
 	startTime = time.Now()
 	codeCount = make(map[string]int64)
 
 	return &MetricHandler{
-		projectID:    projectID,
-		instanceID:   instanceID,
-		instanceZone: instanceZone,
-		metricDomain: metricDomain,
-		ctx:          ctx,
-		client:       client,
+		projectID:      projectID,
+		metricDomain:   metricDomain,
+		resourceType:   resourceType,
+		resourceLabels: resourceLabels,
+		ctx:            ctx,
+		client:         client,
 	}, nil
 }
 
-func parseMonitoringKeyValues(monitoringKeyValues string) (string, string, error) {
-	if monitoringKeyValues == "" {
-		return "", "", nil
-	}
-	res := map[string]string{
+func parseGCEResourceLabels(resourceKeyValues string) (*map[string]string, error) {
+	flags := map[string]string{
 		"instance-id":   "",
 		"instance-zone": "",
 	}
-	pairs := strings.Split(monitoringKeyValues, ",")
+	res := map[string]string{
+		"instance_id": "",
+		"zone":        "",
+	}
+	err := parseResourceLabels(resourceKeyValues, &flags)
+	for key, _ := range res {
+		flagKey := responseCountResourceKeyToFlagName[key]
+		flagValue := flags[flagKey]
+		if flagValue == "" {
+			err := fmt.Errorf("Failed to create metric handler: missing gce_instance resource label (%v)", key)
+			return &res, err
+		}
+		res[key] = flagValue
+	}
+	return &res, err
+}
+
+func parseResourceLabels(resourceKeyValues string, labels *map[string]string) error {
+	if resourceKeyValues == "" {
+		return nil
+	}
+	pairs := strings.Split(resourceKeyValues, ",")
 	for _, p := range pairs {
 		pair := strings.Split(p, "=")
-		if len(pair) > 2 {
+		if len(pair) != 2 {
 			err := fmt.Errorf("Error parsing monitoringKeyValue('%v'): got %v expressions, wanted 2", p, len(pair))
-			return "", "", err
+			return err
 		}
 		key, value := pair[0], pair[1]
-		if _, ok := res[key]; ok {
-			res[key] = value
+		if _, ok := (*labels)[key]; ok {
+			(*labels)[key] = value
 		}
 	}
-	return res["instance-id"], res["instance-zone"], nil
+	return nil
 }
 
 func (h *MetricHandler) WriteMetric(metricType string, statusCode int) error {
@@ -160,7 +189,11 @@ func (h *MetricHandler) writeResponseCodeMetric(statusCode int) error {
 	log.Printf("WriteMetric|attempting to write metrics at time: %v\n", time.Now())
 	for responseCode, count := range codeCount {
 		responseClass := fmt.Sprintf("%sXX", responseCode[0:1])
-		timeSeries := h.newTimeSeries(h.GetResponseCountMetricType(), responseCode, responseClass, newDataPoint(count))
+		metricLabels := map[string]string{
+			"response_code":       responseCode,
+			"response_code_class": responseClass,
+		}
+		timeSeries := h.newTimeSeries(h.GetResponseCountMetricType(), metricLabels, newDataPoint(count))
 
 		log.Printf("got %v occurances of %s response code\n", count, responseCode)
 		log.Printf("%v\n\n", timeSeries)
@@ -182,21 +215,15 @@ func (h *MetricHandler) writeResponseCodeMetric(statusCode int) error {
 }
 
 // newTimeSeries creates and returns a new time series
-func (h *MetricHandler) newTimeSeries(metricType, responseCode, responseClass string, dataPoint *monitoringpb.Point) *monitoringpb.TimeSeries {
+func (h *MetricHandler) newTimeSeries(metricType string, metricLabels map[string]string, dataPoint *monitoringpb.Point) *monitoringpb.TimeSeries {
 	return &monitoringpb.TimeSeries{
 		Metric: &metricpb.Metric{
-			Type: metricType,
-			Labels: map[string]string{
-				"response_code":       responseCode,
-				"response_code_class": responseClass,
-			},
+			Type:   metricType,
+			Labels: metricLabels,
 		},
 		Resource: &monitoredrespb.MonitoredResource{
-			Type: "gce_instance",
-			Labels: map[string]string{
-				"instance_id": h.instanceID,
-				"zone":        h.instanceZone,
-			},
+			Type:   h.resourceType,
+			Labels: *h.resourceLabels,
 		},
 		Points: []*monitoringpb.Point{
 			dataPoint,

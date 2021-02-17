@@ -83,10 +83,11 @@ var (
 	rewriteWebsocketHost    = flag.Bool("rewrite-websocket-host", false, "Whether to rewrite the Host header to the original request when shimming a websocket connection")
 	stripCredentials        = flag.Bool("strip-credentials", false, "Whether to strip the Authorization header from all requests.")
 
-	projectID           = flag.String("monitoring-project-id", "", "Name of the GCP project id")
-	metricDomain        = flag.String("metric-domain", "", "Domain under which to write metrics eg. notebooks.googleapis.com")
-	monitoringEndpoint  = flag.String("monitoring-endpoint", "monitoring.googleapis.com:443", "The endpoint to which to write metrics. Eg: monitoring.googleapis.com corresponds to Cloud Monarch")
-	monitoringKeyValues = flag.String("monitoring-key-values", "", "Comma separated key value pairs for the purpose of monitoring configuration. Eg: 'instance-id=my-instance-id,instance-zone=us-west1-a")
+	projectID                = flag.String("monitoring-project-id", "", "Name of the GCP project id")
+	metricDomain             = flag.String("metric-domain", "", "Domain under which to write metrics eg. notebooks.googleapis.com")
+	monitoringEndpoint       = flag.String("monitoring-endpoint", "monitoring.googleapis.com:443", "The endpoint to which to write metrics. Eg: monitoring.googleapis.com corresponds to Cloud Monarch")
+	monitoringResourceType   = flag.String("monitoring-resource-type", "gce_instance", "The monitoring resource type. Eg: gce_instance")
+	monitoringResourceLabels = flag.String("monitoring-resource-labels", "", "Comma separated key value pairs specifying the resource labels. Eg: 'instance-id=12345678901234,instance-zone=us-west1-a")
 
 	sessionLRU    *sessions.Cache
 	metricHandler *metrics.MetricHandler
@@ -306,7 +307,7 @@ func main() {
 	if *sessionCookieName != "" {
 		sessionLRU = sessions.NewCache(*sessionCookieName, *sessionCookieTimeout, *sessionCookieCacheLimit, *disableSSLForTest)
 	}
-	mh, err := metrics.NewMetricHandler(ctx, *projectID, *monitoringKeyValues, *metricDomain, *monitoringEndpoint)
+	mh, err := metrics.NewMetricHandler(ctx, *projectID, *monitoringResourceType, *monitoringResourceLabels, *metricDomain, *monitoringEndpoint)
 	metricHandler = mh
 	if err != nil {
 		log.Printf("Unable to create metric handler: %v", err)

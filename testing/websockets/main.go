@@ -42,10 +42,11 @@ var (
 	enableWebsocketInjection = flag.Bool("enable-websocket-injection", false, "Enables websockets message injection. "+
 		"Websocket message injection will inject all headers from the HTTP request to /data and inject them "+
 		"into JSON-serialized websocket messages at the JSONPath `resource.headers`")
-	projectID           = flag.String("monitoring-project-id", "", "Name of the GCP project id")
-	metricDomain        = flag.String("metric-domain", "", "Domain under which to write metrics eg. notebooks.googleapis.com")
-	monitoringEndpoint  = flag.String("monitoring-endpoint", "staging-monitoring.sandbox.googleapis.com:443", "The endpoint to which to write metrics. Eg: monitoring.googleapis.com corresponds to Cloud Monarch.")
-	monitoringKeyValues = flag.String("monitoring-key-values", "instance-id=fake-instance,instance-zone=us-west1-a", "Comma separated key value pairs for the purpose of monitoring configuration. Eg: 'instance-id=my-instance-id,instance-zone=us-west1-a")
+	projectID                = flag.String("monitoring-project-id", "", "Name of the GCP project id")
+	metricDomain             = flag.String("metric-domain", "", "Domain under which to write metrics eg. notebooks.googleapis.com")
+	monitoringEndpoint       = flag.String("monitoring-endpoint", "staging-monitoring.sandbox.googleapis.com:443", "The endpoint to which to write metrics. Eg: monitoring.googleapis.com corresponds to Cloud Monarch.")
+	monitoringResourceType   = flag.String("monitoring-resource-type", "gce_instance", "The monitoring resource type. Eg: gce_instance")
+	monitoringResourceLabels = flag.String("monitoring-resource-labels", "instance-id=fake-instance-id,instance-zone=us-west1-a", "Comma separated key value pairs for the purpose of monitoring configuration. Eg: 'instance-id=my-instance-id,instance-zone=us-west1-a")
 )
 
 func main() {
@@ -61,7 +62,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failure parsing the address of the backend server: %v", err)
 	}
-	metricHandler, err := metrics.NewMetricHandler(context.Background(), *projectID, *monitoringKeyValues, *metricDomain, *monitoringEndpoint)
+	metricHandler, err := metrics.NewMetricHandler(context.Background(), *projectID, *monitoringResourceType, *monitoringResourceLabels, *metricDomain, *monitoringEndpoint)
 	if err != nil {
 		log.Printf("Unable to create metric handler: %v", err)
 	}
