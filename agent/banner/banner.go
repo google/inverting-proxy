@@ -170,7 +170,7 @@ func (w *bannerResponseWriter) getBanner(favIconLink string) ([]byte, error) {
 }
 
 func (w *bannerResponseWriter) WriteHeader(statusCode int) {
-	w.metricHandler.WriteMetric(w.metricHandler.GetResponseCountMetricType(), statusCode)
+	w.metricHandler.WriteResponseCodeMetric(statusCode)
 
 	if w.wroteHeader {
 		return
@@ -194,14 +194,14 @@ func (w *bannerResponseWriter) WriteHeader(statusCode int) {
 	if err != nil {
 		sc := http.StatusInternalServerError
 		http.Error(w, err.Error(), sc)
-		w.metricHandler.WriteMetric(w.metricHandler.GetResponseCountMetricType(), sc)
+		w.metricHandler.WriteResponseCodeMetric(sc)
 		return
 	}
 	banner, e := w.getBanner(favIconLink)
 	if e != nil {
 		sc := http.StatusInternalServerError
 		http.Error(w, e.Error(), sc)
-		w.metricHandler.WriteMetric(w.metricHandler.GetResponseCountMetricType(), sc)
+		w.metricHandler.WriteResponseCodeMetric(sc)
 		return
 	}
 
@@ -213,7 +213,7 @@ func (w *bannerResponseWriter) Write(bs []byte) (int, error) {
 	if !w.wroteHeader {
 		statusCode := http.StatusOK
 		w.WriteHeader(statusCode)
-		w.metricHandler.WriteMetric(w.metricHandler.GetResponseCountMetricType(), statusCode)
+		w.metricHandler.WriteResponseCodeMetric(statusCode)
 	}
 	if !w.writeBytes {
 		return len(bs), nil

@@ -75,7 +75,7 @@ func (w *sessionResponseWriter) Write(bs []byte) (int, error) {
 	if !w.wroteHeader {
 		statusCode := http.StatusOK
 		w.WriteHeader(statusCode)
-		w.metricHandler.WriteMetric(w.metricHandler.GetResponseCountMetricType(), statusCode)
+		w.metricHandler.WriteResponseCodeMetric(statusCode)
 	}
 	return w.wrapped.Write(bs)
 }
@@ -160,7 +160,7 @@ func (h *sessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Failure reading the cookie jar for session %q: %v", sessionID, err)
 		statusCode := http.StatusInternalServerError
 		http.Error(w, fmt.Sprintf("Internal error reading the session %q", sessionID), statusCode)
-		h.metricHandler.WriteMetric(h.metricHandler.GetResponseCountMetricType(), statusCode)
+		h.metricHandler.WriteResponseCodeMetric(statusCode)
 		return
 	}
 	cachedCookies := cachedCookieJar.Cookies(&urlForCookies)

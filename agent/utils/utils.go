@@ -130,7 +130,7 @@ func parseRequestIDs(response *http.Response, metricHandler *metrics.MetricHandl
 		return nil, fmt.Errorf("Failed to read the forwarded request: %q\n", err.Error())
 	}
 	if response.StatusCode != http.StatusOK {
-		metricHandler.WriteMetric(metricHandler.GetResponseCountMetricType(), response.StatusCode)
+		metricHandler.WriteResponseCodeMetric(response.StatusCode)
 		return nil, fmt.Errorf("Failed to list pending requests: %d, %q", response.StatusCode, responseBytes)
 	}
 	if len(responseBytes) <= 0 {
@@ -237,7 +237,7 @@ func parseRequestFromProxyResponse(backendID, requestID string, proxyResp *http.
 	startTimeStr := proxyResp.Header.Get(HeaderRequestStartTime)
 
 	if proxyResp.StatusCode != http.StatusOK {
-		metricHandler.WriteMetric(metricHandler.GetResponseCountMetricType(), proxyResp.StatusCode)
+		metricHandler.WriteResponseCodeMetric(proxyResp.StatusCode)
 		return nil, fmt.Errorf("Error status while reading %q from the proxy", requestID)
 	}
 
@@ -454,7 +454,7 @@ func (rf *ResponseForwarder) WriteHeader(code int) {
 			// we signal that issue to any remaining writers.
 			rf.response.Body.(*io.PipeReader).CloseWithError(err)
 		}
-		rf.metricHandler.WriteMetric(rf.metricHandler.GetResponseCountMetricType(), rf.response.StatusCode)
+		rf.metricHandler.WriteResponseCodeMetric(rf.response.StatusCode)
 		close(rf.forwardingErrors)
 	}()
 }

@@ -232,9 +232,9 @@ func TestGetResponseCountMetricType_Empty(t *testing.T) {
 	}
 }
 
-func TestWriteMetric_Empty(t *testing.T) {
+func TestWriteResponseCodeMetric_Empty(t *testing.T) {
 	var metricHandler *MetricHandler
-	if res := metricHandler.WriteMetric(metricHandler.GetResponseCountMetricType(), 200); res != nil {
-		t.Errorf("WriteMetric(): got: %v, want: %v", res, nil)
+	if res := metricHandler.WriteResponseCodeMetric(200); res != nil {
+		t.Errorf("WriteResponseCodeMetric(): got: %v, want: %v", res, nil)
 	}
 }

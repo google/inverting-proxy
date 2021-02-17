@@ -313,7 +313,7 @@ func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost b
 			log.Printf("Failed to dial the websocket server %q: %v\n", targetURL.String(), err)
 			statusCode := http.StatusInternalServerError
 			http.Error(w, fmt.Sprintf("internal error opening a shim connection: %v", err), statusCode)
-			metricHandler.WriteMetric(metricHandler.GetResponseCountMetricType(), statusCode)
+			metricHandler.WriteResponseCodeMetric(statusCode)
 			return
 		}
 		connections.Store(sessionID, conn)
@@ -335,12 +335,12 @@ func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost b
 			log.Printf("Failed to serialize the response to a websocket open request: %v", err)
 			statusCode := http.StatusInternalServerError
 			http.Error(w, fmt.Sprintf("internal error opening a shim connection: %v", err), statusCode)
-			metricHandler.WriteMetric(metricHandler.GetResponseCountMetricType(), statusCode)
+			metricHandler.WriteResponseCodeMetric(statusCode)
 			return
 		}
 		statusCode := http.StatusOK
 		w.WriteHeader(statusCode)
-		metricHandler.WriteMetric(metricHandler.GetResponseCountMetricType(), statusCode)
+		metricHandler.WriteResponseCodeMetric(statusCode)
 		w.Write(respBytes)
 	}), metricHandler)
 	mux.HandleFunc(path.Join(shimPath, "open"), func(w http.ResponseWriter, r *http.Request) {
@@ -348,14 +348,14 @@ func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost b
 		if err != nil {
 			statusCode := http.StatusInternalServerError
 			http.Error(w, fmt.Sprintf("internal error reading a shim request: %v", err), statusCode)
-			metricHandler.WriteMetric(metricHandler.GetResponseCountMetricType(), statusCode)
+			metricHandler.WriteResponseCodeMetric(statusCode)
 			return
 		}
 		targetURL, err := url.Parse(string(body))
 		if err != nil {
 			statusCode := http.StatusBadRequest
 			http.Error(w, fmt.Sprintf("malformed shim open request: %v", err), statusCode)
-			metricHandler.WriteMetric(metricHandler.GetResponseCountMetricType(), statusCode)
+			metricHandler.WriteResponseCodeMetric(statusCode)
 			return
 		}
 		// Restore the original request URL before calling the openWebsocketWrapper
@@ -367,28 +367,28 @@ func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost b
 		if err != nil {
 			statusCode := http.StatusInternalServerError
 			http.Error(w, fmt.Sprintf("internal error reading a shim request: %v", err), statusCode)
-			metricHandler.WriteMetric(metricHandler.GetResponseCountMetricType(), statusCode)
+			metricHandler.WriteResponseCodeMetric(statusCode)
 			return
 		}
 		var msg sessionMessage
 		if err := json.Unmarshal(body, &msg); err != nil {
 			statusCode := http.StatusBadRequest
 			http.Error(w, fmt.Sprintf("error parsing a shim request: %v", err), statusCode)
-			metricHandler.WriteMetric(metricHandler.GetResponseCountMetricType(), statusCode)
+			metricHandler.WriteResponseCodeMetric(statusCode)
 			return
 		}
 		c, ok := connections.Load(msg.ID)
 		if !ok {
 			statusCode := http.StatusBadRequest
 			http.Error(w, fmt.Sprintf("unknown shim session ID: %q", msg.ID), statusCode)
-			metricHandler.WriteMetric(metricHandler.GetResponseCountMetricType(), statusCode)
+			metricHandler.WriteResponseCodeMetric(statusCode)
 			return
 		}
 		conn, ok := c.(*Connection)
 		if !ok {
 			statusCode := http.StatusInternalServerError
 			http.Error(w, "internal error reading a shim session", statusCode)
-			metricHandler.WriteMetric(metricHandler.GetResponseCountMetricType(), statusCode)
+			metricHandler.WriteResponseCodeMetric(statusCode)
 			return
 		}
 		connections.Delete(msg.ID)
@@ -396,21 +396,21 @@ func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost b
 		statusCode := http.StatusOK
 		w.WriteHeader(statusCode)
 		w.Write([]byte("ok"))
-		metricHandler.WriteMetric(metricHandler.GetResponseCountMetricType(), statusCode)
+		metricHandler.WriteResponseCodeMetric(statusCode)
 	})
 	mux.HandleFunc(path.Join(shimPath, "data"), func(w http.ResponseWriter, r *http.Request) {
 		body, err := ioutil.ReadAll(r.Body)
 		if err != nil {
 			statusCode := http.StatusInternalServerError
 			http.Error(w, fmt.Sprintf("internal error reading a shim request: %v", err), statusCode)
-			metricHandler.WriteMetric(metricHandler.GetResponseCountMetricType(), statusCode)
+			metricHandler.WriteResponseCodeMetric(statusCode)
 			return
 		}
 		var msgs []sessionMessage
 		if err := json.Unmarshal(body, &msgs); err != nil {
 			statusCode := http.StatusBadRequest
 			http.Error(w, fmt.Sprintf("error parsing a shim request: %v", err), statusCode)
-			metricHandler.WriteMetric(metricHandler.GetResponseCountMetricType(), statusCode)
+			metricHandler.WriteResponseCodeMetric(statusCode)
 			return
 		}
 		var injectedHeaders map[string]string
@@ -431,80 +431,80 @@ func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost b
 			if !ok {
 				statusCode := http.StatusBadRequest
 				http.Error(w, fmt.Sprintf("unknown shim session ID: %q", msg.ID), statusCode)
-				metricHandler.WriteMetric(metricHandler.GetResponseCountMetricType(), statusCode)
+				metricHandler.WriteResponseCodeMetric(statusCode)
 				return
 			}
 			conn, ok := c.(*Connection)
 			if !ok {
 				statusCode := http.StatusInternalServerError
 				http.Error(w, "internal error reading a shim session", statusCode)
-				metricHandler.WriteMetric(metricHandler.GetResponseCountMetricType(), statusCode)
+				metricHandler.WriteResponseCodeMetric(statusCode)
 				return
 			}
 			if err := conn.SendClientMessage(msg.Message, enableWebsocketInjection, injectedHeaders); err != nil {
 				statusCode := http.StatusBadRequest
 				http.Error(w, fmt.Sprintf("attempt to send data on a closed session: %q", msg.ID), statusCode)
-				metricHandler.WriteMetric(metricHandler.GetResponseCountMetricType(), statusCode)
+				metricHandler.WriteResponseCodeMetric(statusCode)
 				return
 			}
 		}
 		statusCode := http.StatusOK
 		w.WriteHeader(statusCode)
 		w.Write([]byte("ok"))
-		metricHandler.WriteMetric(metricHandler.GetResponseCountMetricType(), statusCode)
+		metricHandler.WriteResponseCodeMetric(statusCode)
 	})
 	mux.HandleFunc(path.Join(shimPath, "poll"), func(w http.ResponseWriter, r *http.Request) {
 		body, err := ioutil.ReadAll(r.Body)
 		if err != nil {
 			statusCode := http.StatusInternalServerError
 			http.Error(w, fmt.Sprintf("internal error reading a shim request: %v", err), statusCode)
-			metricHandler.WriteMetric(metricHandler.GetResponseCountMetricType(), statusCode)
+			metricHandler.WriteResponseCodeMetric(statusCode)
 			return
 		}
 		var msg sessionMessage
 		if err := json.Unmarshal(body, &msg); err != nil {
 			statusCode := http.StatusBadRequest
 			http.Error(w, fmt.Sprintf("error parsing a shim request: %v", err), statusCode)
-			metricHandler.WriteMetric(metricHandler.GetResponseCountMetricType(), statusCode)
+			metricHandler.WriteResponseCodeMetric(statusCode)
 			return
 		}
 		c, ok := connections.Load(msg.ID)
 		if !ok {
 			statusCode := http.StatusBadRequest
 			http.Error(w, fmt.Sprintf("unknown shim session ID: %q", msg.ID), statusCode)
-			metricHandler.WriteMetric(metricHandler.GetResponseCountMetricType(), statusCode)
+			metricHandler.WriteResponseCodeMetric(statusCode)
 			return
 		}
 		conn, ok := c.(*Connection)
 		if !ok {
 			statusCode := http.StatusInternalServerError
 			http.Error(w, "internal error reading a shim session", statusCode)
-			metricHandler.WriteMetric(metricHandler.GetResponseCountMetricType(), statusCode)
+			metricHandler.WriteResponseCodeMetric(statusCode)
 			return
 		}
 		serverMsgs, err := conn.ReadServerMessages()
 		if err != nil {
 			statusCode := http.StatusBadRequest
 			http.Error(w, fmt.Sprintf("attempt to read data from a closed session: %q", msg.ID), statusCode)
-			metricHandler.WriteMetric(metricHandler.GetResponseCountMetricType(), statusCode)
+			metricHandler.WriteResponseCodeMetric(statusCode)
 			return
 		} else if serverMsgs == nil {
 			statusCode := http.StatusRequestTimeout
 			w.WriteHeader(statusCode)
-			metricHandler.WriteMetric(metricHandler.GetResponseCountMetricType(), statusCode)
+			metricHandler.WriteResponseCodeMetric(statusCode)
 			return
 		}
 		respBytes, err := json.Marshal(serverMsgs)
 		if err != nil {
 			statusCode := http.StatusInternalServerError
 			http.Error(w, fmt.Sprintf("internal error serializing the server-side messages %v", err), statusCode)
-			metricHandler.WriteMetric(metricHandler.GetResponseCountMetricType(), statusCode)
+			metricHandler.WriteResponseCodeMetric(statusCode)
 			return
 		}
 		statusCode := http.StatusOK
 		w.WriteHeader(statusCode)
 		w.Write(respBytes)
-		metricHandler.WriteMetric(metricHandler.GetResponseCountMetricType(), statusCode)
+		metricHandler.WriteResponseCodeMetric(statusCode)
 	})
 	return mux
 }

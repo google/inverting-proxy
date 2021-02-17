@@ -151,17 +151,6 @@ func parseResourceLabels(resourceKeyValues string, labels *map[string]string) er
 	return nil
 }
 
-func (h *MetricHandler) WriteMetric(metricType string, statusCode int) error {
-	if h == nil {
-		return nil
-	}
-	if metricType == h.GetResponseCountMetricType() {
-		err := h.writeResponseCodeMetric(statusCode)
-		return err
-	}
-	return nil
-}
-
 func (h *MetricHandler) GetResponseCountMetricType() string {
 	if h == nil {
 		return ""
@@ -170,7 +159,10 @@ func (h *MetricHandler) GetResponseCountMetricType() string {
 }
 
 // writeResponseCodeMetric will gather response codes and write to cloud monarch once sample period is over
-func (h *MetricHandler) writeResponseCodeMetric(statusCode int) error {
+func (h *MetricHandler) WriteResponseCodeMetric(statusCode int) error {
+	if h == nil {
+		return nil
+	}
 	responseCode := fmt.Sprintf("%v", statusCode)
 
 	// Update response code count for the current sample period
@@ -186,7 +178,7 @@ func (h *MetricHandler) writeResponseCodeMetric(statusCode int) error {
 	}
 
 	// Write metric
-	log.Printf("WriteMetric|attempting to write metrics at time: %v\n", time.Now())
+	log.Printf("WriteResponseCodeMetric|attempting to write metrics at time: %v\n", time.Now())
 	for responseCode, count := range codeCount {
 		responseClass := fmt.Sprintf("%sXX", responseCode[0:1])
 		metricLabels := map[string]string{
