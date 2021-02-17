@@ -72,7 +72,6 @@ var stripHeaderNames = map[string]bool{
 	"Sec-Websocket-Key":        true,
 	"Sec-Websocket-Version":    true,
 	"Sec-Websocket-Extensions": true,
-	"Sec-Websocket-Protocol":   true,
 }
 
 // stripWSHeader strips request headers that are not allowed by the websocket.Client library,
