@@ -42,10 +42,11 @@ var (
 	enableWebsocketInjection = flag.Bool("enable-websocket-injection", false, "Enables websockets message injection. "+
 		"Websocket message injection will inject all headers from the HTTP request to /data and inject them "+
 		"into JSON-serialized websocket messages at the JSONPath `resource.headers`")
-	projectID    = flag.String("project-id", "", "Name of the GCP project id")
-	instanceID   = flag.String("instance-id", "", "Name of the notebook instance")
-	instanceZone = flag.String("zone", "", "Location of the notebook instance")
-	metricDomain = flag.String("metric-domain", "", "Domain under which to write metrics eg. notebooks.googleapis.com")
+	projectID           = flag.String("project-id", "", "Name of the GCP project id")
+	instanceID          = flag.String("instance-id", "", "Name of the notebook instance")
+	instanceZone        = flag.String("zone", "", "Location of the notebook instance")
+	metricDomain        = flag.String("metric-domain", "", "Domain under which to write metrics eg. notebooks.googleapis.com")
+	monitoringKeyValues = flag.String("monitoring-key-values", "instance-id=fake-instance,instance-zone=us-west1-a", "Comma separated key value pairs for the purpose of monitoring configuration. Eg: 'instance-id=my-instance-id,instance-zone=us-west1-a")
 )
 
 func main() {
@@ -61,7 +62,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failure parsing the address of the backend server: %v", err)
 	}
-	metricHandler, err := metrics.NewMetricHandler(context.Background(), *projectID, *instanceID, *instanceZone, *metricDomain)
+	metricHandler, err := metrics.NewMetricHandler(context.Background(), *projectID, *monitoringKeyValues, *metricDomain)
 	if err != nil {
 		log.Printf("Unable to create metric handler: %v", err)
 	}

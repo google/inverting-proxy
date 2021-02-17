@@ -17,38 +17,39 @@ import (
 	"context"
 	"fmt"
 	"testing"
+
+	gax "github.com/googleapis/gax-go/v2"
+	monitoringpb "google.golang.org/genproto/googleapis/monitoring/v3"
 )
 
 // fakeMetricClient is a stub of MetricClient for the purpose of testing
 type fakeMetricClient struct {
-        Requests []*monitoringpb.CreateTimeSeriesRequest
+	Requests []*monitoringpb.CreateTimeSeriesRequest
 }
 
 func (f *fakeMetricClient) CreateTimeSeries(ctx context.Context, req *monitoringpb.CreateTimeSeriesRequest, opts ...gax.CallOption) error {
-        f.Requests = append(f.Requests, req)
-        return nil
+	f.Requests = append(f.Requests, req)
+	return nil
 }
 
 // NewFakeMetricHandler instantiates a fake metric client for the purpose of testing
-func NewFakeMetricHandler(ctx context.Context, projectID, instanceID, instanceZone, metricDomain string) (*MetricHandler, error) {
-        client := fakeMetricClient{}
-        return newMetricHandlerHelper(ctx, projectID, instanceID, instanceZone, metricDomain, &client)
+func NewFakeMetricHandler(ctx context.Context, projectID, monitoringKeyValues, metricDomain string) (*MetricHandler, error) {
+	client := fakeMetricClient{}
+	return newMetricHandlerHelper(ctx, projectID, monitoringKeyValues, metricDomain, &client)
 }
 
 func TestNewMetricHandler(t *testing.T) {
 	c := context.Background()
 	testCases := []struct {
-		projectID    string
-		instanceID   string
-		instanceZone string
-		metricDomain string
-		want         *MetricHandler
+		projectID           string
+		monitoringKeyValues string
+		metricDomain        string
+		want                *MetricHandler
 	}{
 		{
-			projectID:    "fake-project",
-			instanceID:   "fake-instance",
-			instanceZone: "fake-zone",
-			metricDomain: "fake-domain.googleapis.com",
+			projectID:           "fake-project",
+			monitoringKeyValues: "instance-id=fake-instance,instance-zone=fake-zone",
+			metricDomain:        "fake-domain.googleapis.com",
 			want: &MetricHandler{
 				projectID:    "fake-project",
 				instanceID:   "fake-instance",
@@ -61,22 +62,22 @@ func TestNewMetricHandler(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		got, err := NewFakeMetricHandler(c, tc.projectID, tc.instanceID, tc.instanceZone, tc.metricDomain)
+		got, err := NewFakeMetricHandler(c, tc.projectID, tc.monitoringKeyValues, tc.metricDomain)
 		want := tc.want
 		if err != nil {
-			t.Errorf("NewFakeMetricHandler(%v, %v, %v, %v, %v): got unexpected error: %v", c, tc.projectID, tc.instanceID, tc.instanceZone, tc.metricDomain, err)
+			t.Errorf("NewFakeMetricHandler(%v, %v, %v, %v): got unexpected error: %v", c, tc.projectID, tc.monitoringKeyValues, tc.metricDomain, err)
 		}
 		if got.projectID != want.projectID {
-			t.Errorf("NewFakeMetricHandler(%v, %v, %v, %v, %v): wrong projectID: got: %v, want: %v", c, tc.projectID, tc.instanceID, tc.instanceZone, tc.metricDomain, got.projectID, want.projectID)
+			t.Errorf("NewFakeMetricHandler(%v, %v, %v, %v): wrong projectID: got: %v, want: %v", c, tc.projectID, tc.monitoringKeyValues, tc.metricDomain, got.projectID, want.projectID)
 		}
 		if got.instanceID != want.instanceID {
-			t.Errorf("NewFakeMetricHandler(%v, %v, %v, %v, %v): wrong instanceID: got: %v, want: %v", c, tc.projectID, tc.instanceID, tc.instanceZone, tc.metricDomain, got.instanceID, want.instanceID)
+			t.Errorf("NewFakeMetricHandler(%v, %v, %v, %v): wrong instanceID: got: %v, want: %v", c, tc.projectID, tc.monitoringKeyValues, tc.metricDomain, got.instanceID, want.instanceID)
 		}
 		if got.instanceZone != want.instanceZone {
-			t.Errorf("NewFakeMetricHandler(%v, %v, %v, %v, %v): wrong instanceZone: got: %v, want: %v", c, tc.projectID, tc.instanceID, tc.instanceZone, tc.metricDomain, got.instanceZone, want.instanceZone)
+			t.Errorf("NewFakeMetricHandler(%v, %v, %v, %v): wrong instanceZone: got: %v, want: %v", c, tc.projectID, tc.monitoringKeyValues, tc.metricDomain, got.instanceZone, want.instanceZone)
 		}
 		if got.metricDomain != want.metricDomain {
-			t.Errorf("NewFakeMetricHandler(%v, %v, %v, %v, %v): wrong metricDomain: got: %v, want: %v", c, tc.projectID, tc.instanceID, tc.instanceZone, tc.metricDomain, got.metricDomain, want.metricDomain)
+			t.Errorf("NewFakeMetricHandler(%v, %v, %v, %v): wrong metricDomain: got: %v, want: %v", c, tc.projectID, tc.monitoringKeyValues, tc.metricDomain, got.metricDomain, want.metricDomain)
 		}
 	}
 }
@@ -84,47 +85,95 @@ func TestNewMetricHandler(t *testing.T) {
 func TestNewMetricHandler_MissingArgs(t *testing.T) {
 	c := context.Background()
 	testCases := []struct {
-		projectID    string
-		instanceID   string
-		instanceZone string
-		metricDomain string
-		err          error
+		projectID           string
+		monitoringKeyValues string
+		metricDomain        string
+		err                 error
 	}{
 		{
-			projectID:    "",
-			instanceID:   "",
-			instanceZone: "",
-			metricDomain: "",
-			err:          fmt.Errorf("Failed to create metric handler: missing projectID"),
+			projectID:           "",
+			monitoringKeyValues: "",
+			metricDomain:        "",
+			err:                 fmt.Errorf("Failed to create metric handler: missing projectID"),
 		},
 		{
-			projectID:    "fake-project",
-			instanceID:   "",
-			instanceZone: "",
-			metricDomain: "",
-			err:          fmt.Errorf("Failed to create metric handler: missing instanceID"),
+			projectID:           "fake-project",
+			monitoringKeyValues: "",
+			metricDomain:        "",
+			err:                 fmt.Errorf("Failed to create metric handler: missing instanceID"),
 		},
 		{
-			projectID:    "fake-project",
-			instanceID:   "fake-instance",
-			instanceZone: "",
-			metricDomain: "",
-			err:          fmt.Errorf("Failed to create metric handler: missing instanceZone"),
+			projectID:           "fake-project",
+			monitoringKeyValues: "instance-id=fake-instance,instance-zone=",
+			metricDomain:        "",
+			err:                 fmt.Errorf("Failed to create metric handler: missing instanceZone"),
 		},
 		{
-			projectID:    "fake-project",
-			instanceID:   "fake-instance",
-			instanceZone: "fake-zone",
-			metricDomain: "",
-			err:          fmt.Errorf("Failed to create metric handler: missing metricDomain"),
+			projectID:           "fake-project",
+			monitoringKeyValues: "instance-id=fake-instance,instance-zone=fake-zone",
+			metricDomain:        "",
+			err:                 fmt.Errorf("Failed to create metric handler: missing metricDomain"),
 		},
 	}
 
 	for _, tc := range testCases {
-		_, got := NewFakeMetricHandler(c, tc.projectID, tc.instanceID, tc.instanceZone, tc.metricDomain)
+		_, got := NewFakeMetricHandler(c, tc.projectID, tc.monitoringKeyValues, tc.metricDomain)
 		want := tc.err
 		if got == nil || got.Error() != want.Error() {
-			t.Errorf("NewFakeMetricHandler(%v, %v, %v, %v, %v): got: %v, want: %v", c, tc.projectID, tc.instanceID, tc.instanceZone, tc.metricDomain, got, want)
+			t.Errorf("NewFakeMetricHandler(%v, %v, %v, %v): got: %v, want: %v", c, tc.projectID, tc.monitoringKeyValues, tc.metricDomain, got, want)
+		}
+	}
+}
+
+func TestParseMonitoringKeyValues(t *testing.T) {
+	testCases := []struct {
+		monitoringKeyValues string
+		wantedInstanceID    string
+		wantedInstanceZone  string
+		err                 error
+	}{
+		{
+			monitoringKeyValues: "",
+			wantedInstanceID:    "",
+			wantedInstanceZone:  "",
+			err:                 nil,
+		},
+		{
+			monitoringKeyValues: "instance-id=fake-instance",
+			wantedInstanceID:    "fake-instance",
+			wantedInstanceZone:  "",
+			err:                 nil,
+		},
+		{
+			monitoringKeyValues: "instance-zone=fake-zone",
+			wantedInstanceID:    "",
+			wantedInstanceZone:  "fake-zone",
+			err:                 nil,
+		},
+		{
+			monitoringKeyValues: "instance-id=fake-instance,instance-zone=fake-zone",
+			wantedInstanceID:    "fake-instance",
+			wantedInstanceZone:  "fake-zone",
+			err:                 nil,
+		},
+		{
+			monitoringKeyValues: "instance-id=fake-instance,instance-zone==fake-zone",
+			wantedInstanceID:    "",
+			wantedInstanceZone:  "",
+			err:                 fmt.Errorf("Error parsing monitoringKeyValue('instance-zone==fake-zone'): got 3 expressions, wanted 2"),
+		},
+	}
+
+	for _, tc := range testCases {
+		gotInstanceID, gotInstanceZone, err := parseMonitoringKeyValues(tc.monitoringKeyValues)
+		if gotInstanceID != tc.wantedInstanceID {
+			t.Errorf("parseMonitoringKeyValues(%v): got instanceID=%v, want instanceID=%v", tc.monitoringKeyValues, gotInstanceID, tc.wantedInstanceID)
+		}
+		if gotInstanceZone != tc.wantedInstanceZone {
+			t.Errorf("parseMonitoringKeyValues(%v): got instanceZone=%v, want instanceZone=%v", tc.monitoringKeyValues, gotInstanceZone, tc.wantedInstanceZone)
+		}
+		if err == nil && tc.err != nil || err != nil && tc.err == nil {
+			t.Errorf("parseMonitoringKeyValues(%v): got err='%v', want err='%v'", tc.monitoringKeyValues, err, tc.err)
 		}
 	}
 }

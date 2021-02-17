@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	monitoring "cloud.google.com/go/monitoring/apiv3"
@@ -51,7 +52,7 @@ type MetricHandler struct {
 }
 
 // NewMetricHandler instantiates a metric client for the purpose of writing metrics to cloud monarch
-func NewMetricHandler(ctx context.Context, projectID, instanceID, instanceZone, metricDomain string) (*MetricHandler, error) {
+func NewMetricHandler(ctx context.Context, projectID, monitoringKeyValues, metricDomain string) (*MetricHandler, error) {
 	log.Printf("NewMetricHandler|instantiating metric handler")
 	client, err := monitoring.NewMetricClient(
 		ctx,
@@ -61,10 +62,14 @@ func NewMetricHandler(ctx context.Context, projectID, instanceID, instanceZone, 
 		log.Fatalf("Failed to create client: %v", err)
 		return nil, err
 	}
-	return newMetricHandlerHelper(ctx, projectID, instanceID, instanceZone, metricDomain, client)
+	return newMetricHandlerHelper(ctx, projectID, monitoringKeyValues, metricDomain, client)
 }
 
-func newMetricHandlerHelper(ctx context.Context, projectID, instanceID, instanceZone, metricDomain string, client metricClient) (*MetricHandler, error) {
+func newMetricHandlerHelper(ctx context.Context, projectID, monitoringKeyValues, metricDomain string, client metricClient) (*MetricHandler, error) {
+	instanceID, instanceZone, err := parseMonitoringKeyValues(monitoringKeyValues)
+	if err != nil {
+		return nil, err
+	}
 	if projectID == "" {
 		err := fmt.Errorf("Failed to create metric handler: missing projectID")
 		return nil, err
@@ -93,6 +98,29 @@ func newMetricHandlerHelper(ctx context.Context, projectID, instanceID, instance
 		ctx:          ctx,
 		client:       client,
 	}, nil
+}
+
+func parseMonitoringKeyValues(monitoringKeyValues string) (string, string, error) {
+	if monitoringKeyValues == "" {
+		return "", "", nil
+	}
+	res := map[string]string{
+		"instance-id":   "",
+		"instance-zone": "",
+	}
+	pairs := strings.Split(monitoringKeyValues, ",")
+	for _, p := range pairs {
+		pair := strings.Split(p, "=")
+		if len(pair) > 2 {
+			err := fmt.Errorf("Error parsing monitoringKeyValue('%v'): got %v expressions, wanted 2", p, len(pair))
+			return "", "", err
+		}
+		key, value := pair[0], pair[1]
+		if _, ok := res[key]; ok {
+			res[key] = value
+		}
+	}
+	return res["instance-id"], res["instance-zone"], nil
 }
 
 func (h *MetricHandler) WriteMetric(metricType string, statusCode int) error {
