@@ -56,22 +56,25 @@ const (
 )
 
 var (
-	proxy                = flag.String("proxy", "", "URL (including scheme) of the inverting proxy")
-	proxyTimeout         = flag.Duration("proxy-timeout", 60*time.Second, "Client timeout when sending requests to the inverting proxy")
-	host                 = flag.String("host", "localhost:8080", "Hostname (including port) of the backend server")
-	backendID            = flag.String("backend", "", "Unique ID for this backend.")
-	debug                = flag.Bool("debug", false, "Whether or not to print debug log messages")
-	disableSSLForTest    = flag.Bool("disable-ssl-for-test", false, "Disable requirements for SSL when running tests locally")
-	favIconURL           = flag.String("favicon-url", "", "URL of the favicon")
-	forwardUserID        = flag.Bool("forward-user-id", false, "Whether or not to include the ID (email address) of the end user in requests to the backend")
-	injectBanner         = flag.String("inject-banner", "", "HTML snippet to inject in served webpages")
-	bannerHeight         = flag.String("banner-height", "40px", "Height of the injected banner. This is ignored if no banner is set.")
-	shimWebsockets       = flag.Bool("shim-websockets", false, "Whether or not to replace websockets with a shim")
-	shimPath             = flag.String("shim-path", "", "Path under which to handle websocket shim requests")
-	healthCheckPath      = flag.String("health-check-path", "/", "Path on backend host to issue health checks against.  Defaults to the root.")
-	healthCheckFreq      = flag.Int("health-check-interval-seconds", 0, "Wait time in seconds between health checks.  Set to zero to disable health checks.  Checks disabled by default.")
-	healthCheckUnhealthy = flag.Int("health-check-unhealthy-threshold", 2, "A so-far healthy backend will be marked unhealthy after this many consecutive failures. The minimum value is 1.")
-	disableGCEVM         = flag.Bool("disable-gce-vm-header", false, "Disable the agent from adding a GCE VM header.")
+	proxy                     = flag.String("proxy", "", "URL (including scheme) of the inverting proxy")
+	proxyTimeout              = flag.Duration("proxy-timeout", 60*time.Second, "Client timeout when sending requests to the inverting proxy")
+	host                      = flag.String("host", "localhost:8080", "Hostname (including port) of the backend server")
+	backendID                 = flag.String("backend", "", "Unique ID for this backend.")
+	debug                     = flag.Bool("debug", false, "Whether or not to print debug log messages")
+	disableSSLForTest         = flag.Bool("disable-ssl-for-test", false, "Disable requirements for SSL when running tests locally")
+	favIconURL                = flag.String("favicon-url", "", "URL of the favicon")
+	forwardUserID             = flag.Bool("forward-user-id", false, "Whether or not to include the ID (email address) of the end user in requests to the backend")
+	injectBanner              = flag.String("inject-banner", "", "HTML snippet to inject in served webpages")
+	bannerHeight              = flag.String("banner-height", "40px", "Height of the injected banner. This is ignored if no banner is set.")
+	shimWebsockets            = flag.Bool("shim-websockets", false, "Whether or not to replace websockets with a shim")
+	shimPath                  = flag.String("shim-path", "", "Path under which to handle websocket shim requests")
+	healthCheckPath           = flag.String("health-check-path", "/", "Path on backend host to issue health checks against.  Defaults to the root.")
+	healthCheckFreq           = flag.Int("health-check-interval-seconds", 0, "Wait time in seconds between health checks.  Set to zero to disable health checks.  Checks disabled by default.")
+	healthCheckUnhealthy      = flag.Int("health-check-unhealthy-threshold", 2, "A so-far healthy backend will be marked unhealthy after this many consecutive failures. The minimum value is 1.")
+	disableGCEVM              = flag.Bool("disable-gce-vm-header", false, "Disable the agent from adding a GCE VM header.")
+	enableWebsocketsInjection = flag.Bool("enable-websockets-injection", false, "Enables the injection of HTTP headers into websocket messages. "+
+		"Websocket message injection will inject all headers from the HTTP request to /data and inject them "+
+		"into JSON-serialized websocket messages at the JSONPath `resource.headers`")
 
 	sessionCookieName       = flag.String("session-cookie-name", "", "Name of the session cookie; an empty value disables agent-based session tracking")
 	sessionCookieTimeout    = flag.Duration("session-cookie-timeout", 12*time.Hour, "Expiration flag for the session cookie")
@@ -101,7 +104,7 @@ func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) 
 		// restricted to a path prefix not equal to "/" will fail for websocket open requests. Passing in the
 		// sessionHandler twice allows the websocket handler to ensure that cookies are applied based on the
 		// correct, restored path.
-		h, err = websockets.Proxy(ctx, h, host, shimPath, *rewriteWebsocketHost, sessionLRU.SessionHandler)
+		h, err = websockets.Proxy(ctx, h, host, shimPath, *rewriteWebsocketHost, *enableWebsocketsInjection, sessionLRU.SessionHandler)
 		if injectShimCode {
 			shimFunc, err := websockets.ShimBody(shimPath)
 			if err != nil {
