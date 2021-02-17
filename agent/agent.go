@@ -85,6 +85,7 @@ var (
 
 	projectID           = flag.String("project-id", "", "Name of the GCP project id")
 	metricDomain        = flag.String("metric-domain", "", "Domain under which to write metrics eg. notebooks.googleapis.com")
+	monitoringEndpoint  = flag.String("monitoring-endpoint", "monitoring.googleapis.com:443", "The endpoint to which to write metrics. Eg: monitoring.googleapis.com corresponds to Cloud Monarch.")
 	monitoringKeyValues = flag.String("monitoring-key-values", "", "Comma separated key value pairs for the purpose of monitoring configuration. Eg: 'instance-id=my-instance-id,instance-zone=us-west1-a")
 
 	sessionLRU    *sessions.Cache
@@ -305,7 +306,7 @@ func main() {
 	if *sessionCookieName != "" {
 		sessionLRU = sessions.NewCache(*sessionCookieName, *sessionCookieTimeout, *sessionCookieCacheLimit, *disableSSLForTest)
 	}
-	mh, err := metrics.NewMetricHandler(ctx, *projectID, *monitoringKeyValues, *metricDomain)
+	mh, err := metrics.NewMetricHandler(ctx, *projectID, *monitoringKeyValues, *metricDomain, *monitoringEndpoint)
 	metricHandler = mh
 	if err != nil {
 		log.Printf("Unable to create metric handler: %v", err)

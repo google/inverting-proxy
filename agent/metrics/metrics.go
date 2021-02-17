@@ -31,7 +31,6 @@ import (
 
 const (
 	samplePeriod = 60 * time.Second
-	endpoint     = "monitoring.sandbox.googleapis.com:443"
 )
 
 var startTime time.Time
@@ -52,7 +51,7 @@ type MetricHandler struct {
 }
 
 // NewMetricHandler instantiates a metric client for the purpose of writing metrics to cloud monarch
-func NewMetricHandler(ctx context.Context, projectID, monitoringKeyValues, metricDomain string) (*MetricHandler, error) {
+func NewMetricHandler(ctx context.Context, projectID, monitoringKeyValues, metricDomain, endpoint string) (*MetricHandler, error) {
 	log.Printf("NewMetricHandler|instantiating metric handler")
 	client, err := monitoring.NewMetricClient(
 		ctx,

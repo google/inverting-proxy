@@ -46,6 +46,7 @@ var (
 	instanceID          = flag.String("instance-id", "", "Name of the notebook instance")
 	instanceZone        = flag.String("zone", "", "Location of the notebook instance")
 	metricDomain        = flag.String("metric-domain", "", "Domain under which to write metrics eg. notebooks.googleapis.com")
+	monitoringEndpoint  = flag.String("monitoring-endpoint", "staging-monitoring.sandbox.googleapis.com:443", "The endpoint to which to write metrics. Eg: monitoring.googleapis.com corresponds to Cloud Monarch.")
 	monitoringKeyValues = flag.String("monitoring-key-values", "instance-id=fake-instance,instance-zone=us-west1-a", "Comma separated key value pairs for the purpose of monitoring configuration. Eg: 'instance-id=my-instance-id,instance-zone=us-west1-a")
 )
 
@@ -62,7 +63,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failure parsing the address of the backend server: %v", err)
 	}
-	metricHandler, err := metrics.NewMetricHandler(context.Background(), *projectID, *monitoringKeyValues, *metricDomain)
+	metricHandler, err := metrics.NewMetricHandler(context.Background(), *projectID, *monitoringKeyValues, *metricDomain, *monitoringEndpoint)
 	if err != nil {
 		log.Printf("Unable to create metric handler: %v", err)
 	}
