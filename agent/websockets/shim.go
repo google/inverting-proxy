@@ -292,7 +292,7 @@ type sessionMessage struct {
 	Version int         `json:"v,omitempty"`
 }
 
-func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost bool, openWebsocketWrapper func(http.Handler) http.Handler) http.Handler {
+func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost bool, openWebsocketWrapper func(http.Handler) http.Handler, enableWebsocketInjection bool) http.Handler {
 	var connections sync.Map
 	var sessionCount uint64
 	mux := http.NewServeMux()
@@ -388,6 +388,19 @@ func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost b
 			http.Error(w, fmt.Sprintf("error parsing a shim request: %v", err), http.StatusBadRequest)
 			return
 		}
+		var injectedHeaders map[string]string
+		if enableWebsocketInjection {
+			injectedHeaders = map[string]string{}
+			for key, value := range r.Header {
+				if len(value) > 0 {
+					// only grab the first header value
+					injectedHeaders[key] = value[0]
+					if len(value) > 1 {
+						log.Printf("More than one header value found for header %q; silently dropping...", key)
+					}
+				}
+			}
+		}
 		for _, msg := range msgs {
 			c, ok := connections.Load(msg.ID)
 			if !ok {
@@ -399,7 +412,7 @@ func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost b
 				http.Error(w, "internal error reading a shim session", http.StatusInternalServerError)
 				return
 			}
-			if err := conn.SendClientMessage(msg.Message); err != nil {
+			if err := conn.SendClientMessage(msg.Message, enableWebsocketInjection, injectedHeaders); err != nil {
 				http.Error(w, fmt.Sprintf("attempt to send data on a closed session: %q", msg.ID), http.StatusBadRequest)
 				return
 			}
@@ -451,11 +464,11 @@ func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost b
 // openWebsocketWrapper is a http.Handler wrapper function that is invoked on websocket open requests after the original
 // targetURL of the request is restored. It must call the wrapped http.Handler with which it is created after it
 // is finished processing the request.
-func Proxy(ctx context.Context, wrapped http.Handler, host, shimPath string, rewriteHost bool, openWebsocketWrapper func(wrapped http.Handler) http.Handler) (http.Handler, error) {
+func Proxy(ctx context.Context, wrapped http.Handler, host, shimPath string, rewriteHost, enableWebsocketInjection bool, openWebsocketWrapper func(wrapped http.Handler) http.Handler) (http.Handler, error) {
 	mux := http.NewServeMux()
 	if shimPath != "" {
 		shimPath = path.Clean("/"+shimPath) + "/"
-		shimServer := createShimChannel(ctx, host, shimPath, rewriteHost, openWebsocketWrapper)
+		shimServer := createShimChannel(ctx, host, shimPath, rewriteHost, openWebsocketWrapper, enableWebsocketInjection)
 		mux.Handle(shimPath, shimServer)
 	}
 	mux.Handle("/", wrapped)

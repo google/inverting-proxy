@@ -35,9 +35,12 @@ import (
 )
 
 var (
-	port     = flag.Int("port", 0, "Port on which to listen")
-	backend  = flag.String("backend", "", "URL of the backend HTTP server to proxy")
-	shimPath = flag.String("shim-path", "websocket-shim", "Path under which to handle websocket shim requests")
+	port                     = flag.Int("port", 0, "Port on which to listen")
+	backend                  = flag.String("backend", "", "URL of the backend HTTP server to proxy")
+	shimPath                 = flag.String("shim-path", "websocket-shim", "Path under which to handle websocket shim requests")
+	enableWebsocketInjection = flag.Bool("enable-websocket-injection", false, "Enables websockets message injection. "+
+		"Websocket message injection will inject all headers from the HTTP request to /data and inject them "+
+		"into JSON-serialized websocket messages at the JSONPath `resource.headers`")
 )
 
 func main() {
@@ -54,7 +57,7 @@ func main() {
 		log.Fatalf("Failure parsing the address of the backend server: %v", err)
 	}
 	backendProxy := httputil.NewSingleHostReverseProxy(backendURL)
-	shimmingProxy, err := websockets.Proxy(context.Background(), backendProxy, backendURL.Host, *shimPath, true, func(h http.Handler) http.Handler { return h })
+	shimmingProxy, err := websockets.Proxy(context.Background(), backendProxy, backendURL.Host, *shimPath, true, *enableWebsocketInjection, func(h http.Handler) http.Handler { return h })
 	if err != nil {
 		log.Fatalf("Failure starting the websocket-shimming proxy: %v", err)
 	}
