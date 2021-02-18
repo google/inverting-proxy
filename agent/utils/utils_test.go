@@ -34,7 +34,7 @@ func TestParseRequests(t *testing.T) {
 		StatusCode: http.StatusOK,
 		Body:       ioutil.NopCloser(strings.NewReader("")),
 	}
-	emptyPendingRequests, err := parseRequestIDs(mockEmptyPendingRequestsResponse)
+	emptyPendingRequests, err := parseRequestIDs(mockEmptyPendingRequestsResponse, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestParseRequests(t *testing.T) {
 		ContentLength: 2,
 		Body:          ioutil.NopCloser(strings.NewReader("[]")),
 	}
-	noPendingRequests, err := parseRequestIDs(mockNoPendingRequestsResponse)
+	noPendingRequests, err := parseRequestIDs(mockNoPendingRequestsResponse, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestParseRequests(t *testing.T) {
 		ContentLength: 6,
 		Body:          ioutil.NopCloser(strings.NewReader("whoops")),
 	}
-	failedPendingRequests, err := parseRequestIDs(mockFailedPendingRequestsResponse)
+	failedPendingRequests, err := parseRequestIDs(mockFailedPendingRequestsResponse, nil)
 	if failedPendingRequests != nil {
 		t.Fatal("Unexpected response for failed pending requests response")
 	}
@@ -73,7 +73,7 @@ func TestParseRequests(t *testing.T) {
 		ContentLength: 10,
 		Body:          ioutil.NopCloser(strings.NewReader("[\"A\", \"B\"]")),
 	}
-	normalPendingRequests, err := parseRequestIDs(mockNormalPendingRequestsResponse)
+	normalPendingRequests, err := parseRequestIDs(mockNormalPendingRequestsResponse, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestParseRequestFromProxyResponse(t *testing.T) {
 		ContentLength: 6,
 		Body:          ioutil.NopCloser(strings.NewReader("whoops")),
 	}
-	failedRequest, err := parseRequestFromProxyResponse("uh", "oh", mockFailedProxyResponse)
+	failedRequest, err := parseRequestFromProxyResponse("uh", "oh", mockFailedProxyResponse, nil)
 	if failedRequest != nil {
 		t.Fatal("Unexpected response for failed proxy response")
 	}
@@ -116,7 +116,7 @@ func TestParseRequestFromProxyResponse(t *testing.T) {
 	mockStartTime := time.Now()
 	mockResponseHeader.Add(HeaderRequestStartTime, mockStartTime.Format(time.RFC3339Nano))
 
-	forwardedRequest, err := parseRequestFromProxyResponse("some-backend", "some-request", mockProxyResponse)
+	forwardedRequest, err := parseRequestFromProxyResponse("some-backend", "some-request", mockProxyResponse, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

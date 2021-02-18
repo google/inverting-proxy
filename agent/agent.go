@@ -44,6 +44,7 @@ import (
 	compute "google.golang.org/api/compute/v1"
 
 	"github.com/google/inverting-proxy/agent/banner"
+	"github.com/google/inverting-proxy/agent/metrics"
 	"github.com/google/inverting-proxy/agent/sessions"
 	"github.com/google/inverting-proxy/agent/utils"
 	"github.com/google/inverting-proxy/agent/websockets"
@@ -82,7 +83,14 @@ var (
 	rewriteWebsocketHost    = flag.Bool("rewrite-websocket-host", false, "Whether to rewrite the Host header to the original request when shimming a websocket connection")
 	stripCredentials        = flag.Bool("strip-credentials", false, "Whether to strip the Authorization header from all requests.")
 
-	sessionLRU *sessions.Cache
+	projectID                = flag.String("monitoring-project-id", "", "Name of the GCP project id")
+	metricDomain             = flag.String("metric-domain", "", "Domain under which to write metrics eg. notebooks.googleapis.com")
+	monitoringEndpoint       = flag.String("monitoring-endpoint", "monitoring.googleapis.com:443", "The endpoint to which to write metrics. Eg: monitoring.googleapis.com corresponds to Cloud Monarch")
+	monitoringResourceType   = flag.String("monitoring-resource-type", "gce_instance", "The monitoring resource type. Eg: gce_instance")
+	monitoringResourceLabels = flag.String("monitoring-resource-labels", "", "Comma separated key value pairs specifying the resource labels. Eg: 'instance-id=12345678901234,instance-zone=us-west1-a")
+
+	sessionLRU    *sessions.Cache
+	metricHandler *metrics.MetricHandler
 )
 
 func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) (http.Handler, error) {
@@ -92,7 +100,7 @@ func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) 
 	})
 	hostProxy.FlushInterval = 100 * time.Millisecond
 	var h http.Handler = hostProxy
-	h = sessionLRU.SessionHandler(h)
+	h = sessionLRU.SessionHandler(h, metricHandler)
 	if shimPath != "" {
 		var err error
 		// Note that we pass in the sessionHandler to the websocket proxy twice (h and sessionLRU.SessionHandler)
@@ -104,7 +112,7 @@ func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) 
 		// restricted to a path prefix not equal to "/" will fail for websocket open requests. Passing in the
 		// sessionHandler twice allows the websocket handler to ensure that cookies are applied based on the
 		// correct, restored path.
-		h, err = websockets.Proxy(ctx, h, host, shimPath, *rewriteWebsocketHost, *enableWebsocketsInjection, sessionLRU.SessionHandler)
+		h, err = websockets.Proxy(ctx, h, host, shimPath, *rewriteWebsocketHost, *enableWebsocketsInjection, sessionLRU.SessionHandler, metricHandler)
 		if injectShimCode {
 			shimFunc, err := websockets.ShimBody(shimPath)
 			if err != nil {
@@ -119,7 +127,7 @@ func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) 
 	if *injectBanner == "" {
 		return h, nil
 	}
-	return banner.Proxy(ctx, h, *injectBanner, *bannerHeight, *favIconURL)
+	return banner.Proxy(ctx, h, *injectBanner, *bannerHeight, *favIconURL, metricHandler)
 }
 
 // forwardRequest forwards the given request from the proxy to
@@ -171,7 +179,7 @@ func processOneRequest(client *http.Client, hostProxy http.Handler, backendID st
 		}
 		return nil
 	}
-	if err := utils.ReadRequest(client, *proxy, backendID, requestID, requestForwarder); err != nil {
+	if err := utils.ReadRequest(client, *proxy, backendID, requestID, requestForwarder, metricHandler); err != nil {
 		log.Printf("Failed to forward a request: [%s] %q\n", requestID, err.Error())
 	}
 }
@@ -182,7 +190,7 @@ func pollForNewRequests(client *http.Client, hostProxy http.Handler, backendID s
 	previouslySeenRequests := lru.New(requestCacheLimit)
 	var retryCount uint
 	for {
-		if requests, err := utils.ListPendingRequests(client, *proxy, backendID); err != nil {
+		if requests, err := utils.ListPendingRequests(client, *proxy, backendID, metricHandler); err != nil {
 			log.Printf("Failed to read pending requests: %q\n", err.Error())
 			time.Sleep(utils.ExponentialBackoffDuration(retryCount))
 			retryCount++
@@ -265,8 +273,8 @@ func runHealthChecks() {
 
 // runAdapter sets up the HTTP client for the agent to use (including OAuth credentials),
 // and then does the actual work of forwarding requests and responses.
-func runAdapter() error {
-	ctx, cancel := context.WithCancel(context.Background())
+func runAdapter(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	client, err := getGoogleClient(ctx)
@@ -285,6 +293,7 @@ func runAdapter() error {
 
 func main() {
 	flag.Parse()
+	ctx := context.Background()
 
 	if *proxy == "" {
 		log.Fatal("You must specify the address of the proxy")
@@ -298,11 +307,16 @@ func main() {
 	if *sessionCookieName != "" {
 		sessionLRU = sessions.NewCache(*sessionCookieName, *sessionCookieTimeout, *sessionCookieCacheLimit, *disableSSLForTest)
 	}
+	mh, err := metrics.NewMetricHandler(ctx, *projectID, *monitoringResourceType, *monitoringResourceLabels, *metricDomain, *monitoringEndpoint)
+	metricHandler = mh
+	if err != nil {
+		log.Printf("Unable to create metric handler: %v", err)
+	}
 
 	waitForHealthy()
 	go runHealthChecks()
 
-	if err := runAdapter(); err != nil {
+	if err := runAdapter(ctx); err != nil {
 		log.Fatal(err.Error())
 	}
 }
