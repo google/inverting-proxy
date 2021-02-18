@@ -170,8 +170,6 @@ func (w *bannerResponseWriter) getBanner(favIconLink string) ([]byte, error) {
 }
 
 func (w *bannerResponseWriter) WriteHeader(statusCode int) {
-	w.metricHandler.WriteResponseCodeMetric(statusCode)
-
 	if w.wroteHeader {
 		return
 	}
@@ -204,16 +202,14 @@ func (w *bannerResponseWriter) WriteHeader(statusCode int) {
 		w.metricHandler.WriteResponseCodeMetric(sc)
 		return
 	}
-
+	w.metricHandler.WriteResponseCodeMetric(statusCode)
 	w.wrapped.WriteHeader(statusCode)
 	w.wrapped.Write(banner)
 }
 
 func (w *bannerResponseWriter) Write(bs []byte) (int, error) {
 	if !w.wroteHeader {
-		statusCode := http.StatusOK
-		w.WriteHeader(statusCode)
-		w.metricHandler.WriteResponseCodeMetric(statusCode)
+		w.WriteHeader(http.StatusOK)
 	}
 	if !w.writeBytes {
 		return len(bs), nil
