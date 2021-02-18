@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	monitoring "cloud.google.com/go/monitoring/apiv3"
@@ -49,6 +50,7 @@ type metricClient interface {
 }
 
 type MetricHandler struct {
+	mu sync.Mutex
 	projectID      string
 	metricDomain   string
 	resourceType   string
@@ -158,22 +160,22 @@ func (h *MetricHandler) GetResponseCountMetricType() string {
 	return fmt.Sprintf("%s/instance/proxy_agent/response_count", h.metricDomain)
 }
 
-// writeResponseCodeMetric will gather response codes and write to cloud monarch once sample period is over
+// WriteResponseCodeMetric will gather response codes and write to cloud monarch once sample period is over
 func (h *MetricHandler) WriteResponseCodeMetric(statusCode int) error {
 	if h == nil {
 		return nil
 	}
 	responseCode := fmt.Sprintf("%v", statusCode)
 
+	// Lock out other goroutines
+	h.mu.Lock()
+
 	// Update response code count for the current sample period
-	if _, ok := codeCount[responseCode]; ok {
-		codeCount[responseCode] += 1
-	} else {
-		codeCount[responseCode] = 1
-	}
+	codeCount[responseCode]++
 
 	// Only write time series after sample period is over
 	if time.Since(startTime) < samplePeriod {
+		h.mu.Unlock()
 		return nil
 	}
 
@@ -202,6 +204,7 @@ func (h *MetricHandler) WriteResponseCodeMetric(statusCode int) error {
 	// Clean up
 	startTime = time.Now()
 	codeCount = make(map[string]int64)
+	h.mu.Unlock()
 
 	return nil
 }
