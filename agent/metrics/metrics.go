@@ -41,7 +41,6 @@ var (
 	}
 )
 
-var startTime time.Time
 var codeCount map[string]int64
 
 // metricClient is a client for interacting with Cloud Monitoring API.
@@ -70,7 +69,30 @@ func NewMetricHandler(ctx context.Context, projectID, resourceType, resourceKeyV
 		log.Fatalf("Failed to create client: %v", err)
 		return nil, err
 	}
-	return newMetricHandlerHelper(ctx, projectID, resourceType, resourceKeyValues, metricDomain, client)
+
+	handler, err := newMetricHandlerHelper(ctx, projectID, resourceType, resourceKeyValues, metricDomain, client)
+	if err != nil {
+		return nil, err
+	}
+
+	go func() {
+		log.Printf("NewMetricHandler|success metric handler ready")
+		ticker := time.NewTicker(samplePeriod)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-handler.ctx.Done():
+				return
+			case <-ticker.C:
+				handler.emitResponseCodeMetric()
+				handler.mu.Lock()
+				codeCount = make(map[string]int64)
+				handler.mu.Unlock()
+			}
+		}
+	}()
+
+	return handler, nil
 }
 
 func newMetricHandlerHelper(ctx context.Context, projectID, resourceType, resourceKeyValues, metricDomain string, client metricClient) (*MetricHandler, error) {
@@ -99,7 +121,6 @@ func newMetricHandlerHelper(ctx context.Context, projectID, resourceType, resour
 		return nil, err
 	}
 
-	startTime = time.Now()
 	codeCount = make(map[string]int64)
 
 	return &MetricHandler{
@@ -160,26 +181,23 @@ func (h *MetricHandler) GetResponseCountMetricType() string {
 	return fmt.Sprintf("%s/instance/proxy_agent/response_count", h.metricDomain)
 }
 
-// WriteResponseCodeMetric will gather response codes and write to cloud monarch once sample period is over
+// WriteResponseCodeMetric will record observed response codes and emitResponseCodeMetric writes to cloud monarch
 func (h *MetricHandler) WriteResponseCodeMetric(statusCode int) error {
 	if h == nil {
 		return nil
 	}
 	responseCode := fmt.Sprintf("%v", statusCode)
 
-	// Lock out other goroutines
-	h.mu.Lock()
-
 	// Update response code count for the current sample period
+	h.mu.Lock()
 	codeCount[responseCode]++
+	h.mu.Unlock()
 
-	// Only write time series after sample period is over
-	if time.Since(startTime) < samplePeriod {
-		h.mu.Unlock()
-		return nil
-	}
+	return nil
+}
 
-	// Write metric
+// emitResponseCodeMetric emits observed response codes to cloud monarch once sample period is over
+func (h *MetricHandler) emitResponseCodeMetric() {
 	log.Printf("WriteResponseCodeMetric|attempting to write metrics at time: %v\n", time.Now())
 	for responseCode, count := range codeCount {
 		responseClass := fmt.Sprintf("%sXX", responseCode[0:1])
@@ -197,16 +215,8 @@ func (h *MetricHandler) WriteResponseCodeMetric(statusCode int) error {
 			TimeSeries: []*monitoringpb.TimeSeries{timeSeries},
 		}); err != nil {
 			log.Println("Failed to write time series data: ", err)
-			return err
 		}
 	}
-
-	// Clean up
-	startTime = time.Now()
-	codeCount = make(map[string]int64)
-	h.mu.Unlock()
-
-	return nil
 }
 
 // newTimeSeries creates and returns a new time series
