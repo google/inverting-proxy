@@ -130,7 +130,6 @@ func parseRequestIDs(response *http.Response, metricHandler *metrics.MetricHandl
 		return nil, fmt.Errorf("Failed to read the forwarded request: %q\n", err.Error())
 	}
 	if response.StatusCode != http.StatusOK {
-		metricHandler.WriteResponseCodeMetric(response.StatusCode)
 		return nil, fmt.Errorf("Failed to list pending requests: %d, %q", response.StatusCode, responseBytes)
 	}
 	if len(responseBytes) <= 0 {
