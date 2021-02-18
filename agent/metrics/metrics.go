@@ -50,7 +50,7 @@ type metricClient interface {
 }
 
 type MetricHandler struct {
-	mu sync.Mutex
+	mu             sync.Mutex
 	projectID      string
 	metricDomain   string
 	resourceType   string
