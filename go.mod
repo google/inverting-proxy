@@ -5,7 +5,6 @@ go 1.13
 require (
 	cloud.google.com/go v0.50.0
 	github.com/golang/groupcache v0.0.0-20191027212112-611e8accdfc9
-	github.com/golang/protobuf/ptypes/timestamp v1.4.3
 	github.com/golang/protobuf v1.3.2
 	github.com/google/go-cmp v0.5.4
 	github.com/google/uuid v1.1.1
