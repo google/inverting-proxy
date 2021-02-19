@@ -73,7 +73,7 @@ func client(server *httptest.Server) (*http.Client, error) {
 func TestSessionsEnabled(t *testing.T) {
 	testHandler := backendHandler(t)
 	c := NewCache(sessionCookie, sessionLifetime, sessionCount, true)
-	h := c.SessionHandler(testHandler)
+	h := c.SessionHandler(testHandler, nil)
 	testServer := httptest.NewServer(h)
 	defer testServer.Close()
 	serverURL, err := url.Parse(testServer.URL)
@@ -102,7 +102,7 @@ func TestSessionsEnabledIfNoCookieSet(t *testing.T) {
 		w.Write([]byte("OK"))
 	})
 	c := NewCache(sessionCookie, sessionLifetime, sessionCount, true)
-	h := c.SessionHandler(testHandler)
+	h := c.SessionHandler(testHandler, nil)
 	testServer := httptest.NewServer(h)
 	defer testServer.Close()
 
@@ -125,7 +125,7 @@ func TestSessionsEnabledIfNoCookieSet(t *testing.T) {
 func TestSessionsDisabled(t *testing.T) {
 	testHandler := backendHandler(t)
 	var c *Cache
-	h := c.SessionHandler(testHandler)
+	h := c.SessionHandler(testHandler, nil)
 	testServer := httptest.NewServer(h)
 	defer testServer.Close()
 	serverURL, err := url.Parse(testServer.URL)

@@ -68,7 +68,9 @@ const (
 
     function sendMessages(){
       conn.send("Text Message");
-      conn.send(new Blob(["Binary Message"]));
+	  conn.send(new Blob(["Binary Message"]));
+	  conn.send("{\"message\":\"JSON text message\",\"resource\":{\"headers\":{}}}");
+	  conn.send(new Blob(["{\"message\":\"JSON binary message\",\"resource\":{\"headers\":{}}}"]));
     }
     window.setInterval(sendMessages, 10000);
     </script>
