@@ -30,6 +30,7 @@ RUN wget -O /opt/go1.14.2.linux-amd64.tar.gz \
     export PATH=${PATH}:/usr/local/go/bin/:/opt/bin/ && \
     export GOPATH=/opt/ && \
     go get github.com/golang/groupcache/lru && \
+    go get github.com/google/go-cmp/cmp && \
     go get github.com/google/uuid && \
     go get golang.org/x/net/context && \
     go get golang.org/x/net/publicsuffix && \
