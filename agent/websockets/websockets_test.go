@@ -27,28 +27,44 @@ import (
 
 func TestInjectWebsocketMessage(t *testing.T) {
 	// Create the request bytes to use in the test cases
-	simpleMsgStruct := &map[string]interface{}{
+	simpleMsgStruct := map[string]interface{}{
 		"test": &map[string]interface{}{},
 	}
-	complexMsgStruct := &map[string]interface{}{
+	complexMsgStruct := map[string]interface{}{
 		"a": "y",
 		"b": &map[string]interface{}{
 			"aa": false,
 			"ab": map[string]string{"q": "r"},
 		},
-		"c": "z",
+		"test": &map[string]interface{}{},
+		"c":    "z",
 	}
 	simpleMsgBytes, err := json.Marshal(simpleMsgStruct)
 	if err != nil {
 		t.Fatalf("Failed to marshal message: %v", err)
 	}
-	complexMsgBytes, err := json.Marshal(&complexMsgStruct)
+	complexMsgBytes, err := json.Marshal(complexMsgStruct)
+	if err != nil {
+		t.Fatalf("Failed to marshal message: %v", err)
+	}
+	singleSimpleMsgStruct := []string{string(simpleMsgBytes)}
+	singleSimpleMsgBytes, err := json.Marshal(singleSimpleMsgStruct)
+	if err != nil {
+		t.Fatalf("Failed to marshal message: %v", err)
+	}
+	singleComplexMsgStruct := []string{string(complexMsgBytes)}
+	singleComplexMsgBytes, err := json.Marshal(singleComplexMsgStruct)
+	if err != nil {
+		t.Fatalf("Failed to marshal message: %v", err)
+	}
+	multipleMsgStruct := []string{string(simpleMsgBytes), string(complexMsgBytes)}
+	multipleMsgBytes, err := json.Marshal(multipleMsgStruct)
 	if err != nil {
 		t.Fatalf("Failed to marshal message: %v", err)
 	}
 	emptyMsg := &message{
 		Type: websocket.TextMessage,
-		Data: []byte("{}"),
+		Data: []byte("[\"{}\"]"),
 	}
 	invalidEmptyMsg := &message{
 		Type: websocket.TextMessage,
@@ -56,11 +72,15 @@ func TestInjectWebsocketMessage(t *testing.T) {
 	}
 	simpleMsg := &message{
 		Type: websocket.TextMessage,
-		Data: simpleMsgBytes,
+		Data: singleSimpleMsgBytes,
 	}
 	complexMsg := &message{
 		Type: websocket.TextMessage,
-		Data: complexMsgBytes,
+		Data: singleComplexMsgBytes,
+	}
+	multipleMsg := &message{
+		Type: websocket.TextMessage,
+		Data: multipleMsgBytes,
 	}
 	invalidFormatMsg := &message{
 		Type: websocket.TextMessage,
@@ -83,35 +103,35 @@ func TestInjectWebsocketMessage(t *testing.T) {
 			wantError:       cmpopts.AnyError,
 		},
 		{
-			description:     "Valid empty websocket message injects one value",
+			description:     "Single valid empty websocket message injects one value",
 			message:         emptyMsg,
 			injectionPath:   []string{},
 			injectionValues: map[string]string{"test": "value"},
-			wantMessage:     []byte("{\"test\":\"value\"}"),
+			wantMessage:     []byte("[\"{\\\"test\\\":\\\"value\\\"}\"]"),
 		},
 		{
-			description:     "Valid simple websocket message injects one value",
+			description:     "Single valid simple websocket message injects one value",
 			message:         simpleMsg,
 			injectionPath:   []string{"test"},
 			injectionValues: map[string]string{"test_key": "value"},
-			wantMessage:     []byte("{\"test\":{\"test_key\":\"value\"}}"),
+			wantMessage:     []byte("[\"{\\\"test\\\":{\\\"test_key\\\":\\\"value\\\"}}\"]"),
 		},
 		{
-			description:     "Valid simple websocket message with no path component returns error",
+			description:     "Single valid simple websocket message with no path component returns error",
 			message:         simpleMsg,
 			injectionPath:   []string{"does_not_exist"},
 			injectionValues: map[string]string{"test": "value"},
 			wantError:       cmpopts.AnyError,
 		},
 		{
-			description:     "Valid complex websocket message injects one value",
+			description:     "Single valid complex websocket message injects one value",
 			message:         complexMsg,
 			injectionPath:   []string{"b", "ab"},
 			injectionValues: map[string]string{"test": "value"},
-			wantMessage:     []byte("{\"a\":\"y\",\"b\":{\"aa\":false,\"ab\":{\"q\":\"r\",\"test\":\"value\"}},\"c\":\"z\"}"),
+			wantMessage:     []byte("[\"{\\\"a\\\":\\\"y\\\",\\\"b\\\":{\\\"aa\\\":false,\\\"ab\\\":{\\\"q\\\":\\\"r\\\",\\\"test\\\":\\\"value\\\"}},\\\"c\\\":\\\"z\\\",\\\"test\\\":{}}\"]"),
 		},
 		{
-			description:     "Valid complex websocket message with no path component object returns error",
+			description:     "Single valid complex websocket message with no path component object returns error",
 			message:         complexMsg,
 			injectionPath:   []string{"b", "does_not_exist"},
 			injectionValues: map[string]string{"test": "value"},
@@ -125,27 +145,27 @@ func TestInjectWebsocketMessage(t *testing.T) {
 			wantError:       cmpopts.AnyError,
 		},
 		{
-			description:     "Non JSON message injects returns error",
+			description:     "Single non JSON message injects returns error",
 			message:         invalidFormatMsg,
 			injectionPath:   []string{"b", "ab"},
 			injectionValues: map[string]string{"test": "value"},
 			wantError:       cmpopts.AnyError,
 		},
 		{
-			description:   "Message with nil values returns no error",
+			description:   "Single message with nil values returns no error",
 			message:       simpleMsg,
 			injectionPath: []string{"test"},
-			wantMessage:   []byte("{\"test\":{}}"),
+			wantMessage:   []byte("[\"{\\\"test\\\":{}}\"]"),
 		},
 		{
-			description:     "Message with empty values injects no values and returns no errors",
+			description:     "Single message with empty values injects no values and returns no errors",
 			message:         simpleMsg,
 			injectionPath:   []string{"test"},
 			injectionValues: map[string]string{},
-			wantMessage:     []byte("{\"test\":{}}"),
+			wantMessage:     []byte("[\"{\\\"test\\\":{}}\"]"),
 		},
 		{
-			description:   "Complex message with multiple values injects multiple values",
+			description:   "Single complex message with multiple values injects multiple values",
 			message:       complexMsg,
 			injectionPath: []string{"b", "ab"},
 			injectionValues: map[string]string{
@@ -153,10 +173,10 @@ func TestInjectWebsocketMessage(t *testing.T) {
 				"test2": "value2",
 				"test3": "value3",
 			},
-			wantMessage: []byte("{\"a\":\"y\",\"b\":{\"aa\":false,\"ab\":{\"q\":\"r\",\"test1\":\"value1\",\"test2\":\"value2\",\"test3\":\"value3\"}},\"c\":\"z\"}"),
+			wantMessage: []byte("[\"{\\\"a\\\":\\\"y\\\",\\\"b\\\":{\\\"aa\\\":false,\\\"ab\\\":{\\\"q\\\":\\\"r\\\",\\\"test1\\\":\\\"value1\\\",\\\"test2\\\":\\\"value2\\\",\\\"test3\\\":\\\"value3\\\"}},\\\"c\\\":\\\"z\\\",\\\"test\\\":{}}\"]"),
 		},
 		{
-			description:   "Complex message with multiple values injects values without overwriting initial values",
+			description:   "Single complex message with multiple values injects values without overwriting initial values",
 			message:       complexMsg,
 			injectionPath: []string{"b", "ab"},
 			injectionValues: map[string]string{
@@ -164,7 +184,25 @@ func TestInjectWebsocketMessage(t *testing.T) {
 				"test2": "value2",
 				"test3": "value3",
 			},
-			wantMessage: []byte("{\"a\":\"y\",\"b\":{\"aa\":false,\"ab\":{\"q\":\"r\",\"test2\":\"value2\",\"test3\":\"value3\"}},\"c\":\"z\"}"),
+			wantMessage: []byte("[\"{\\\"a\\\":\\\"y\\\",\\\"b\\\":{\\\"aa\\\":false,\\\"ab\\\":{\\\"q\\\":\\\"r\\\",\\\"test2\\\":\\\"value2\\\",\\\"test3\\\":\\\"value3\\\"}},\\\"c\\\":\\\"z\\\",\\\"test\\\":{}}\"]"),
+		},
+		{
+			description:   "Multiple messages injects values into all messages",
+			message:       multipleMsg,
+			injectionPath: []string{"test"},
+			injectionValues: map[string]string{
+				"test_key": "value",
+			},
+			wantMessage: []byte("[\"{\\\"test\\\":{\\\"test_key\\\":\\\"value\\\"}}\",\"{\\\"a\\\":\\\"y\\\",\\\"b\\\":{\\\"aa\\\":false,\\\"ab\\\":{\\\"q\\\":\\\"r\\\"}},\\\"c\\\":\\\"z\\\",\\\"test\\\":{\\\"test_key\\\":\\\"value\\\"}}\"]"),
+		},
+		{
+			description:   "Multiple messages with key mismatch between messages returns error",
+			message:       multipleMsg,
+			injectionPath: []string{"b", "ab"},
+			injectionValues: map[string]string{
+				"test_key": "value",
+			},
+			wantError: cmpopts.AnyError,
 		},
 	}
 

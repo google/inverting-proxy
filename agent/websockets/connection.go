@@ -274,31 +274,46 @@ func injectWebsocketMessage(msg *message, injectionPath []string, injectionValue
 	if injectionValues == nil || len(injectionValues) == 0 {
 		return msg, nil
 	}
-	// Deserialize the websocket message into a JSON object.
-	var origJSONComponent map[string]interface{}
-	err := json.Unmarshal(msg.Data, &origJSONComponent)
+	// Deserialize the websocket message into a list of JSON object strings.
+	var jsonMessages []string
+	err := json.Unmarshal(msg.Data, &jsonMessages)
 	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal as json message: %v", err)
+		return nil, fmt.Errorf("failed to unmarshal as json message list: %v", err)
 	}
-	var currJSONComponent map[string]interface{}
-	var ok bool
-	currJSONComponent = origJSONComponent
-	for _, pathComponent := range injectionPath {
-		currJSONComponent, ok = currJSONComponent[pathComponent].(map[string]interface{})
-		if !ok {
-			return nil, fmt.Errorf("failed to inject value due to unexpected message json format")
+	for idx, componentStr := range jsonMessages {
+		var origJSONComponent map[string]interface{}
+		var ok bool
+		err := json.Unmarshal([]byte(componentStr), &origJSONComponent)
+		if err != nil {
+			return nil, fmt.Errorf("failed to unmarshal as json message: %v", err)
 		}
-	}
+		currJSONComponent := origJSONComponent
+		for _, pathComponent := range injectionPath {
+			currJSONComponent, ok = currJSONComponent[pathComponent].(map[string]interface{})
+			if !ok {
+				return nil, fmt.Errorf("failed to inject value due to unexpected message json format")
+			}
+		}
 
-	// Inject the header values into the specified key. Do not overwrite existing header values.
-	for key, value := range injectionValues {
-		if _, ok := currJSONComponent[key]; !ok {
-			currJSONComponent[key] = value
+		// Inject the header values into the specified key. Do not overwrite existing header values.
+		for key, value := range injectionValues {
+			if _, ok := currJSONComponent[key]; !ok {
+				currJSONComponent[key] = value
+			}
 		}
+
+		// Reserialize the component into JSON.
+		newJSONComponentBytes, err := json.Marshal(origJSONComponent)
+		if err != nil {
+			return nil, fmt.Errorf("failed to re-marshal new json component: %v", err)
+		}
+
+		// Replace the string in the slice.
+		jsonMessages[idx] = string(newJSONComponentBytes)
 	}
 
 	// Reserialize the websocket message.
-	newMsgBytes, err := json.Marshal(&origJSONComponent)
+	newMsgBytes, err := json.Marshal(&jsonMessages)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal json as bytes: %v", err)
 	}
