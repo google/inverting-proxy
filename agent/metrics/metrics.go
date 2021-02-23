@@ -60,6 +60,10 @@ type MetricHandler struct {
 
 // NewMetricHandler instantiates a metric client for the purpose of writing metrics to cloud monarch
 func NewMetricHandler(ctx context.Context, projectID, resourceType, resourceKeyValues, metricDomain, endpoint string) (*MetricHandler, error) {
+	if projectID == "" || resourceType == "" || resourceKeyValues == "" || metricDomain == "" || endpoint == "" {
+		log.Printf("Skipping metric handler initialization due to empty arguments.")
+		return nil, nil
+	}
 	log.Printf("NewMetricHandler|instantiating metric handler")
 	client, err := monitoring.NewMetricClient(
 		ctx,
