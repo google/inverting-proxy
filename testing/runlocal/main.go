@@ -57,6 +57,7 @@ var (
 	respTmpl = template.Must(template.New("response").Parse(responseTemplate))
 )
 
+// RunLocalProxy runs a proxy locally
 func RunLocalProxy(ctx context.Context) (int, error) {
 	// This assumes that "Make build" has been run
 	proxyArgs := fmt.Sprintf("${GOPATH}/bin/inverting-proxy --port=%d", *port)

@@ -127,10 +127,10 @@ func parseRequestIDs(response *http.Response, metricHandler *metrics.MetricHandl
 	}
 	responseBytes, err := ioutil.ReadAll(responseBody)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to read the forwarded request: %q\n", err.Error())
+		return nil, fmt.Errorf("failed to read the forwarded request: %q", err.Error())
 	}
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Failed to list pending requests: %d, %q", response.StatusCode, responseBytes)
+		return nil, fmt.Errorf("failed to list pending requests: %d, %q", response.StatusCode, responseBytes)
 	}
 	if len(responseBytes) <= 0 {
 		return []string{}, nil
@@ -138,7 +138,7 @@ func parseRequestIDs(response *http.Response, metricHandler *metrics.MetricHandl
 
 	var requests []string
 	if err := json.Unmarshal(responseBytes, &requests); err != nil {
-		return nil, fmt.Errorf("Failed to parse the requests: %q\n", err.Error())
+		return nil, fmt.Errorf("failed to parse the requests: %q", err.Error())
 	}
 	return requests, nil
 }

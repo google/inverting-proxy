@@ -140,9 +140,9 @@ func (w *bannerResponseWriter) getFavIconLink() (string, error) {
 	}
 	var favIconLinkBuf bytes.Buffer
 	templateVals := &struct {
-		FavIconUrl string
+		FavIconURL string
 	}{
-		FavIconUrl: w.favIconURL,
+		FavIconURL: w.favIconURL,
 	}
 	if err := favIconLinkTmpl.Execute(&favIconLinkBuf, templateVals); err != nil {
 		return "", err
@@ -185,9 +185,9 @@ func (w *bannerResponseWriter) WriteHeader(statusCode int) {
 		w.wrapped.WriteHeader(statusCode)
 		w.writeBytes = true
 		return
-	} else {
-		w.Header().Del(contentEncodingHeader)
 	}
+	w.Header().Del(contentEncodingHeader)
+
 	favIconLink, err := w.getFavIconLink()
 	if err != nil {
 		sc := http.StatusInternalServerError
