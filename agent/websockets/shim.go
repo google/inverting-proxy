@@ -253,6 +253,7 @@ func (sb *shimmedBody) Close() error {
 	return sb.closer.Close()
 }
 
+// ShimBody returns a function that injects code into a *http.Response Body
 func ShimBody(shimPath string) (func(resp *http.Response) error, error) {
 	var templateBuf bytes.Buffer
 	if err := shimTmpl.Execute(&templateBuf, &struct{ ShimPath string }{ShimPath: shimPath}); err != nil {

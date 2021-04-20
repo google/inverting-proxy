@@ -48,6 +48,7 @@ type metricClient interface {
 	CreateTimeSeries(ctx context.Context, req *monitoringpb.CreateTimeSeriesRequest, opts ...gax.CallOption) error
 }
 
+// MetricHandler handles metrics collections/writes to cloud monarch
 type MetricHandler struct {
 	mu             sync.Mutex
 	projectID      string
@@ -147,7 +148,7 @@ func parseGCEResourceLabels(resourceKeyValues string) (*map[string]string, error
 		"zone":        "",
 	}
 	err := parseResourceLabels(resourceKeyValues, &flags)
-	for key, _ := range res {
+	for key := range res {
 		flagKey := responseCountResourceKeyToFlagName[key]
 		flagValue := flags[flagKey]
 		if flagValue == "" {
@@ -178,6 +179,7 @@ func parseResourceLabels(resourceKeyValues string, labels *map[string]string) er
 	return nil
 }
 
+// GetResponseCountMetricType constructs and returns a string representing the response_count metric type
 func (h *MetricHandler) GetResponseCountMetricType() string {
 	if h == nil {
 		return ""
