@@ -239,7 +239,7 @@ func waitForHealthy() {
 		return
 	}
 	ticker := time.NewTicker(time.Duration(*healthCheckFreq) * time.Second)
-	for _ = range ticker.C {
+	for range ticker.C {
 		if healthCheck() == nil {
 			ticker.Stop()
 			return
@@ -261,7 +261,7 @@ func runHealthChecks() {
 	// immediately.
 	ticker := time.NewTicker(time.Duration(*healthCheckFreq) * time.Second)
 	badHealthChecks := 0
-	for _ = range ticker.C {
+	for range ticker.C {
 		if healthCheck() != nil {
 			badHealthChecks++
 		} else {
