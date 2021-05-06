@@ -134,6 +134,9 @@ func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) 
 // the backend server and reports the response back to the proxy.
 func forwardRequest(client *http.Client, hostProxy http.Handler, request *utils.ForwardedRequest) error {
 	httpRequest := request.Contents
+	if *debug {
+		log.Printf("Request %s: %s %s %v\n", request.RequestID, request.Contents.Method, request.Contents.Host, request.Contents.ContentLength)
+	}
 	if *forwardUserID {
 		httpRequest.Header.Add(utils.HeaderUserID, request.User)
 	}
