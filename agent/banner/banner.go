@@ -174,14 +174,14 @@ func (w *bannerResponseWriter) WriteHeader(statusCode int) {
 		return
 	}
 	w.wroteHeader = true
-	if !isFrameableHTMLResponse(statusCode, w.Header()) {
-		w.wrapped.WriteHeader(statusCode)
-		w.writeBytes = true
-		return
+	// Set X-Frame-Options header to sameorigin if the page is already framed
+	// or if the page is frameable.
+	if w.isAlreadyFramed || isFrameableHTMLResponse(statusCode, w.Header()) {
+		setNotCacheable(w.Header())
+		setXFrameOptionsSameOrigin(w.Header())
 	}
-	setNotCacheable(w.Header())
-	setXFrameOptionsSameOrigin(w.Header())
-	if w.isAlreadyFramed {
+	// If we don't need to frame the page, return immediately.
+	if w.isAlreadyFramed || !isFrameableHTMLResponse(statusCode, w.Header()) {
 		w.wrapped.WriteHeader(statusCode)
 		w.writeBytes = true
 		return
