@@ -177,7 +177,6 @@ func (w *bannerResponseWriter) WriteHeader(statusCode int) {
 	// Set X-Frame-Options header to sameorigin if the page is already framed
 	// or if the page is frameable.
 	if w.isAlreadyFramed || isFrameableHTMLResponse(statusCode, w.Header()) {
-		setNotCacheable(w.Header())
 		setXFrameOptionsSameOrigin(w.Header())
 	}
 	// If we don't need to frame the page, return immediately.
@@ -186,6 +185,8 @@ func (w *bannerResponseWriter) WriteHeader(statusCode int) {
 		w.writeBytes = true
 		return
 	}
+	// Don't cache the wrapper html that frames the page.
+	setNotCacheable(w.Header())
 	w.Header().Del(contentEncodingHeader)
 
 	favIconLink, err := w.getFavIconLink()
