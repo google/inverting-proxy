@@ -23,21 +23,15 @@ RUN apt-get update && apt-get upgrade -y && \
     mkdir -p /opt/src/github.com/google/inverting-proxy
 
 ADD ./ /opt/src/github.com/google/inverting-proxy
+WORKDIR /opt/src/github.com/google/inverting-proxy
 
-RUN wget -O /opt/go1.14.2.linux-amd64.tar.gz \
-      https://storage.googleapis.com/golang/go1.14.2.linux-amd64.tar.gz && \
-    tar -C /usr/local -xzf /opt/go1.14.2.linux-amd64.tar.gz && \
+RUN wget -O /opt/go1.18.1.linux-amd64.tar.gz \
+      https://storage.googleapis.com/golang/go1.18.1.linux-amd64.tar.gz && \
+    tar -C /usr/local -xzf /opt/go1.18.1.linux-amd64.tar.gz && \
     export PATH=${PATH}:/usr/local/go/bin/:/opt/bin/ && \
     export GOPATH=/opt/ && \
-    go get github.com/golang/groupcache/lru && \
-    go get github.com/google/go-cmp/cmp && \
-    go get github.com/google/uuid && \
-    go get golang.org/x/net/context && \
-    go get golang.org/x/net/publicsuffix && \
-    go get golang.org/x/oauth2/google && \
-    go get google.golang.org/api/compute/v1 && \
     go build -o ${GOPATH}/bin/proxy-forwarding-agent /opt/src/github.com/google/inverting-proxy/agent/agent.go && \
-    rm -rf /opt/go1.4.2.linux-amd64.tar.gz && \
+    rm -rf /opt/go1.18.1.linux-amd64.tar.gz && \
     rm -rf /usr/local
 
 ENV DEBUG "false"
