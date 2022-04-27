@@ -71,6 +71,9 @@ const (
 
 	// Time to wait on first retry
 	firstRetryWaitDuration = time.Millisecond
+
+	// Max number of retries to perform in case of failed read request calls
+	maxReadRequestRetryCount = 2
 )
 
 var (
@@ -231,6 +234,23 @@ func ListPendingRequests(client *http.Client, proxyHost, backendID string, metri
 	return parseRequestIDs(proxyResp, metricHandler)
 }
 
+func getRequestWithRetries(client *http.Client, proxyReq *http.Request) (*http.Response, error) {
+	var proxyResp *http.Response
+	var err error
+	for retryCount := 0; retryCount <= maxReadRequestRetryCount; retryCount++ {
+		proxyResp, err = client.Do(proxyReq)
+		if err != nil {
+			continue
+		}
+		if 500 <= proxyResp.StatusCode && proxyResp.StatusCode < 600 {
+			proxyResp.Body.Close()
+			continue
+		}
+		return proxyResp, nil
+	}
+	return proxyResp, err
+}
+
 func parseRequestFromProxyResponse(backendID, requestID string, proxyResp *http.Response, metricHandler *metrics.MetricHandler) (*ForwardedRequest, error) {
 	user := proxyResp.Header.Get(HeaderUserID)
 	startTimeStr := proxyResp.Header.Get(HeaderRequestStartTime)
@@ -269,7 +289,7 @@ func ReadRequest(client *http.Client, proxyHost, backendID, requestID string, ca
 	}
 	proxyReq.Header.Add(HeaderBackendID, backendID)
 	proxyReq.Header.Add(HeaderRequestID, requestID)
-	proxyResp, err := client.Do(proxyReq)
+	proxyResp, err := getRequestWithRetries(client, proxyReq)
 	if err != nil {
 		return fmt.Errorf("A proxy request failed: %q", err.Error())
 	}
