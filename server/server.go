@@ -248,7 +248,6 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		io.Copy(w, resp.Body)
 		return
 	}
-	log.Printf("Response for %q received after %s", id, time.Since(pending.startTime))
 }
 
 func main() {
