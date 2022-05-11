@@ -271,6 +271,65 @@ func TestResponseForwarderWithProxyHangup(t *testing.T) {
 	}
 }
 
+func TestResponseForwarderWithRetries(t *testing.T) {
+	endUserRequest := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("hello"))
+	try := 0
+	proxyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		try++
+		if try == 1 {
+			// Simulate an error on first attempt - violating redirect policy.
+			w.WriteHeader(http.StatusMovedPermanently)
+			return
+		}
+		if try == 2 {
+			// Simulate an error on second attempt - proxy internal error.
+			http.Error(w, "Proxy internal error", http.StatusInternalServerError)
+			return
+		}
+		response, err := http.ReadResponse(bufio.NewReader(r.Body), endUserRequest)
+		if err != nil {
+			t.Errorf("Failure reading the proxied response: %v", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		responseBytes, err := ioutil.ReadAll(response.Body)
+		if err != nil {
+			t.Errorf("Failure reading the response body: %v", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if got, want := string(responseBytes), "test backend response"; got != want {
+			t.Errorf("Unexpected backend response; got %q, want %q", got, want)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer proxyServer.Close()
+	proxyClient := proxyServer.Client()
+	proxyClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		return errors.New("no redirects")
+	}
+	responseForwarder, err := NewResponseForwarder(proxyClient, proxyServer.URL+"/", "backend", "request")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	backendServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("test backend response"))
+	}))
+	defer backendServer.Close()
+	backendURL, err := url.Parse(backendServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	hostProxy := httputil.NewSingleHostReverseProxy(backendURL)
+	hostProxy.FlushInterval = 100 * time.Millisecond
+	hostProxy.ServeHTTP(responseForwarder, endUserRequest)
+	if err := responseForwarder.Close(); err != nil {
+		t.Errorf("failed to close the response forwarder: %v", err)
+	}
+}
+
 func TestExponentialBackoffDurationDoesntOverflow(t *testing.T) {
 	maxRetry := uint(40)
 

@@ -21,6 +21,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -74,6 +75,12 @@ const (
 
 	// Max number of retries to perform in case of failed read request calls
 	maxReadRequestRetryCount = 2
+
+	// Max number of retries to perform in case of failed write response calls
+	maxWriteResponseRetryCount = 2
+
+	// Size of the buffer that stores the beginning of read response body
+	readResponseBufSize = 4096
 )
 
 var (
@@ -347,6 +354,70 @@ type ResponseForwarder struct {
 	metricHandler *metrics.MetricHandler
 }
 
+func newBufferedReadSeeker(r io.Reader, bufSize int) *bufferedReadSeeker {
+	return &bufferedReadSeeker{
+		r:         r,
+		buf:       make([]byte, bufSize),
+		writeHead: 0,
+		readHead:  0,
+	}
+}
+
+type bufferedReadSeeker struct {
+	r         io.Reader
+	buf       []byte
+	writeHead int
+	readHead  int
+}
+
+func (b *bufferedReadSeeker) Read(p []byte) (int, error) {
+	// Read from buffer.
+	readFromBuf := copy(p, b.buf[b.readHead:b.writeHead])
+	b.readHead += readFromBuf
+	// Read from wrapped source and write to buffer.
+	readFromSource, err := b.r.Read(p[readFromBuf:])
+	written := copy(b.buf[b.writeHead:], p[readFromBuf:(readFromBuf+readFromSource)])
+	b.writeHead += written
+	b.readHead += written
+	return readFromBuf + readFromSource, err
+}
+
+func (b *bufferedReadSeeker) Seek(offset int64, whence int) (int64, error) {
+	if whence != io.SeekStart {
+		return 0, errors.New("only SeekStart offset is supported")
+	}
+	if offset < 0 || offset >= int64(len(b.buf)) {
+		return 0, errors.New("invalid offset value")
+	}
+	if b.writeHead >= len(b.buf) {
+		return 0, errors.New("cannot seek, possible buffer overflow")
+	}
+	b.readHead = int(offset)
+	return int64(b.readHead), nil
+}
+
+func postResponseWithRetries(client *http.Client, proxyReq *http.Request, proxyReadSeeker io.ReadSeeker) error {
+	var proxyResp *http.Response
+	var err error
+	for retryCount := 0; retryCount <= maxWriteResponseRetryCount; retryCount++ {
+		if proxyResp, err = client.Do(proxyReq); err != nil {
+			if _, seekErr := proxyReadSeeker.Seek(0, io.SeekStart); seekErr != nil {
+				return err
+			}
+			continue
+		}
+		proxyResp.Body.Close()
+		if 500 <= proxyResp.StatusCode && proxyResp.StatusCode < 600 {
+			if _, seekErr := proxyReadSeeker.Seek(0, io.SeekStart); seekErr != nil {
+				return err
+			}
+			continue
+		}
+		return nil
+	}
+	return err
+}
+
 // NewResponseForwarder constructs a new ResponseForwarder that forwards to the
 // given proxy for the specified request.
 func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID string) (*ResponseForwarder, error) {
@@ -364,7 +435,8 @@ func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID s
 	responseBodyReader, responseBodyWriter := io.Pipe()
 
 	proxyURL := proxyHost + ResponsePath
-	proxyReq, err := http.NewRequest(http.MethodPost, proxyURL, proxyReader)
+	proxyBufferedReadSeeker := newBufferedReadSeeker(proxyReader, readResponseBufSize)
+	proxyReq, err := http.NewRequest(http.MethodPost, proxyURL, proxyBufferedReadSeeker)
 	if err != nil {
 		return nil, err
 	}
@@ -387,9 +459,10 @@ func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID s
 		// token expires between the header being generated
 		// and the request being sent to the proxy.
 		<-startedChan
-		if _, err := client.Do(proxyReq); err != nil {
+		if err := postResponseWithRetries(client, proxyReq, proxyBufferedReadSeeker); err != nil {
 			proxyClientErrChan <- err
 		}
+		proxyReader.Close()
 		close(proxyClientErrChan)
 	}()
 
