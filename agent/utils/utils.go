@@ -241,9 +241,14 @@ func ListPendingRequests(client *http.Client, proxyHost, backendID string, metri
 	return parseRequestIDs(proxyResp, metricHandler)
 }
 
-func getRequestWithRetries(client *http.Client, proxyReq *http.Request) (*http.Response, error) {
+func getRequestWithRetries(client *http.Client, proxyURL, backendID, requestID string) (*http.Response, error) {
+	proxyReq, err := http.NewRequest(http.MethodGet, proxyURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	proxyReq.Header.Add(HeaderBackendID, backendID)
+	proxyReq.Header.Add(HeaderRequestID, requestID)
 	var proxyResp *http.Response
-	var err error
 	for retryCount := 0; retryCount <= maxReadRequestRetryCount; retryCount++ {
 		proxyResp, err = client.Do(proxyReq)
 		if err != nil {
@@ -290,13 +295,7 @@ func parseRequestFromProxyResponse(backendID, requestID string, proxyResp *http.
 // If the returned request is non-nil, then it is passed to the provided callback.
 func ReadRequest(client *http.Client, proxyHost, backendID, requestID string, callback RequestCallback, metricHandler *metrics.MetricHandler) error {
 	proxyURL := proxyHost + RequestPath
-	proxyReq, err := http.NewRequest(http.MethodGet, proxyURL, nil)
-	if err != nil {
-		return err
-	}
-	proxyReq.Header.Add(HeaderBackendID, backendID)
-	proxyReq.Header.Add(HeaderRequestID, requestID)
-	proxyResp, err := getRequestWithRetries(client, proxyReq)
+	proxyResp, err := getRequestWithRetries(client, proxyURL, backendID, requestID)
 	if err != nil {
 		return fmt.Errorf("A proxy request failed: %q", err.Error())
 	}
@@ -396,9 +395,16 @@ func (b *bufferedReadSeeker) Seek(offset int64, whence int) (int64, error) {
 	return int64(b.readHead), nil
 }
 
-func postResponseWithRetries(client *http.Client, proxyReq *http.Request, proxyReadSeeker io.ReadSeeker) error {
+func postResponseWithRetries(client *http.Client, proxyURL, backendID, requestID string, proxyReader io.Reader) error {
+	proxyReadSeeker := newBufferedReadSeeker(proxyReader, readResponseBufSize)
+	proxyReq, err := http.NewRequest(http.MethodPost, proxyURL, proxyReadSeeker)
+	if err != nil {
+		return err
+	}
+	proxyReq.Header.Set(HeaderBackendID, backendID)
+	proxyReq.Header.Set(HeaderRequestID, requestID)
+	proxyReq.Header.Set("Content-Type", "text/plain")
 	var proxyResp *http.Response
-	var err error
 	for retryCount := 0; retryCount <= maxWriteResponseRetryCount; retryCount++ {
 		if proxyResp, err = client.Do(proxyReq); err != nil {
 			if _, seekErr := proxyReadSeeker.Seek(0, io.SeekStart); seekErr != nil {
@@ -435,14 +441,6 @@ func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID s
 	responseBodyReader, responseBodyWriter := io.Pipe()
 
 	proxyURL := proxyHost + ResponsePath
-	proxyBufferedReadSeeker := newBufferedReadSeeker(proxyReader, readResponseBufSize)
-	proxyReq, err := http.NewRequest(http.MethodPost, proxyURL, proxyBufferedReadSeeker)
-	if err != nil {
-		return nil, err
-	}
-	proxyReq.Header.Set(HeaderBackendID, backendID)
-	proxyReq.Header.Set(HeaderRequestID, requestID)
-	proxyReq.Header.Set("Content-Type", "text/plain")
 
 	proxyClientErrChan := make(chan error, 100)
 	forwardingErrChan := make(chan error, 100)
@@ -459,7 +457,7 @@ func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID s
 		// token expires between the header being generated
 		// and the request being sent to the proxy.
 		<-startedChan
-		if err := postResponseWithRetries(client, proxyReq, proxyBufferedReadSeeker); err != nil {
+		if err := postResponseWithRetries(client, proxyURL, backendID, requestID, proxyReader); err != nil {
 			proxyClientErrChan <- err
 		}
 		proxyReader.Close()
