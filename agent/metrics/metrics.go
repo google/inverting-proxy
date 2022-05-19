@@ -217,7 +217,7 @@ func (h *MetricHandler) emitResponseCodeMetric() {
 		log.Printf("%v\n\n", timeSeries)
 
 		if err := h.client.CreateTimeSeries(h.ctx, &monitoringpb.CreateTimeSeriesRequest{
-			Name:       monitoring.MetricProjectPath(h.projectID),
+			Name:       fmt.Sprintf("projects/%s", h.projectID),
 			TimeSeries: []*monitoringpb.TimeSeries{timeSeries},
 		}); err != nil {
 			log.Println("Failed to write time series data: ", err)

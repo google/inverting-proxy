@@ -229,8 +229,8 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case p.requestIDs <- id:
 	}
 	log.Printf("Request %q enqueued after %s", id, time.Since(pending.startTime))
-
 	// Pull out and copy the response
+	defer log.Printf("Response for %q received after %s", id, time.Since(pending.startTime))
 	select {
 	case <-r.Context().Done():
 		// The client request was cancelled
@@ -248,7 +248,6 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		io.Copy(w, resp.Body)
 		return
 	}
-	log.Printf("Response for %q received after %s", id, time.Since(pending.startTime))
 }
 
 func main() {
