@@ -88,6 +88,7 @@ var (
 	monitoringEndpoint       = flag.String("monitoring-endpoint", "monitoring.googleapis.com:443", "The endpoint to which to write metrics. Eg: monitoring.googleapis.com corresponds to Cloud Monarch")
 	monitoringResourceType   = flag.String("monitoring-resource-type", "gce_instance", "The monitoring resource type. Eg: gce_instance")
 	monitoringResourceLabels = flag.String("monitoring-resource-labels", "", "Comma separated key value pairs specifying the resource labels. Eg: 'instance-id=12345678901234,instance-zone=us-west1-a")
+	gracefulShutdownTimeout  = flag.Duration("graceful-shutdown-timeout", 0, "Timeout for graceful shutdown. Enabled only if greater than 0.")
 
 	sessionLRU    *sessions.Cache
 	metricHandler *metrics.MetricHandler
@@ -189,20 +190,27 @@ func processOneRequest(client *http.Client, hostProxy http.Handler, backendID st
 
 // pollForNewRequests repeatedly reaches out to the proxy server to ask if any pending are available, and then
 // processes any newly-seen ones.
-func pollForNewRequests(client *http.Client, hostProxy http.Handler, backendID string) {
+func pollForNewRequests(pollingCtx context.Context, client *http.Client, hostProxy http.Handler, backendID string) {
 	previouslySeenRequests := lru.New(requestCacheLimit)
+
 	var retryCount uint
 	for {
-		if requests, err := utils.ListPendingRequests(client, *proxy, backendID, metricHandler); err != nil {
-			log.Printf("Failed to read pending requests: %q\n", err.Error())
-			time.Sleep(utils.ExponentialBackoffDuration(retryCount))
-			retryCount++
-		} else {
-			retryCount = 0
-			for _, requestID := range requests {
-				if _, ok := previouslySeenRequests.Get(requestID); !ok {
-					previouslySeenRequests.Add(requestID, requestID)
-					go processOneRequest(client, hostProxy, backendID, requestID)
+		select {
+		case <-pollingCtx.Done():
+			log.Printf("Request polling context completed with ctx err: %v\n", pollingCtx.Err())
+			return
+		default:
+			if requests, err := utils.ListPendingRequests(client, *proxy, backendID, metricHandler); err != nil {
+				log.Printf("Failed to read pending requests: %q\n", err.Error())
+				time.Sleep(utils.ExponentialBackoffDuration(retryCount))
+				retryCount++
+			} else {
+				retryCount = 0
+				for _, requestID := range requests {
+					if _, ok := previouslySeenRequests.Get(requestID); !ok {
+						previouslySeenRequests.Add(requestID, requestID)
+						go processOneRequest(client, hostProxy, backendID, requestID)
+					}
 				}
 			}
 		}
@@ -276,7 +284,7 @@ func runHealthChecks() {
 
 // runAdapter sets up the HTTP client for the agent to use (including OAuth credentials),
 // and then does the actual work of forwarding requests and responses.
-func runAdapter(ctx context.Context) error {
+func runAdapter(ctx context.Context, requestPollingCtx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -290,7 +298,7 @@ func runAdapter(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	pollForNewRequests(client, hostProxy, *backendID)
+	pollForNewRequests(requestPollingCtx, client, hostProxy, *backendID)
 	return nil
 }
 
@@ -319,7 +327,21 @@ func main() {
 	waitForHealthy()
 	go runHealthChecks()
 
-	if err := runAdapter(ctx); err != nil {
-		log.Fatal(err.Error())
+	requestPollingCtx, requestPollingCancel := context.WithCancel(ctx)
+
+	go func(ctx context.Context) {
+		if err := runAdapter(ctx, requestPollingCtx); err != nil {
+			log.Fatal(err.Error())
+		}
+	}(ctx)
+
+	osShutdownSignalCh := utils.ShutdownSignalChan()
+	<-osShutdownSignalCh
+
+	if *gracefulShutdownTimeout > 0 {
+		requestPollingCancel()
+		log.Printf("Begin graceful shutdown. Wait for: %v\n", *gracefulShutdownTimeout)
+		time.Sleep(*gracefulShutdownTimeout)
+		log.Fatal("Graceful shutdown wait timer end. Shutting down server.")
 	}
 }

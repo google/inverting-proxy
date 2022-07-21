@@ -31,6 +31,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -317,6 +318,96 @@ func TestWithInMemoryProxyAndBackendWithSessions(t *testing.T) {
 		// incrementing the value until all 100 runs passed.
 		if err := checkRequest(proxyURL, testPath, testPath, 100*time.Millisecond, sessionCookie); err != nil {
 			t.Fatalf("Failed to send request %d: %v", i, err)
+		}
+	}
+}
+
+func TestGracefulShutdown(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	backendHomeDir, err := ioutil.TempDir("", "backend-home")
+	if err != nil {
+		t.Fatalf("Failed to set up a temporary home directory for the test: %v", err)
+	}
+	gcloudCfg := filepath.Join(backendHomeDir, ".config", "gcloud")
+	if err := os.MkdirAll(gcloudCfg, os.ModePerm); err != nil {
+		t.Fatalf("Failed to set up a temporary home directory for the test: %v", err)
+	}
+	backendURL := RunBackend(ctx, t)
+	fakeMetadataURL := RunFakeMetadataServer(ctx, t)
+
+	parsedBackendURL, err := url.Parse(backendURL)
+	if err != nil {
+		t.Fatalf("Failed to parse the backend URL: %v", err)
+	}
+	proxyPort, err := RunLocalProxy(ctx, t)
+	proxyURL := fmt.Sprintf("http://localhost:%d", proxyPort)
+	if err != nil {
+		t.Fatalf("Failed to run the local inverting proxy: %v", err)
+	}
+	t.Logf("Started backend at localhost:%s and proxy at %s", parsedBackendURL.Port(), proxyURL)
+
+	// This assumes that "Make build" has been run
+	args := strings.Join(append(
+		[]string{"${GOPATH}/bin/proxy-forwarding-agent"},
+		"--debug=true",
+		"--graceful-shutdown-timeout=1s",
+		"--backend=testBackend",
+		"--proxy", proxyURL+"/",
+		"--host=localhost:"+parsedBackendURL.Port()),
+		" ")
+	agentCmd := exec.CommandContext(ctx, "/bin/bash", "-c", args)
+
+	var out bytes.Buffer
+	agentCmd.Stdout = &out
+	agentCmd.Stderr = &out
+	agentCmd.Env = append(os.Environ(), "PATH=", "HOME="+backendHomeDir, "GCE_METADATA_HOST="+strings.TrimPrefix(fakeMetadataURL, "http://"))
+	if err := agentCmd.Start(); err != nil {
+		t.Fatalf("Failed to start the agent binary: %v", err)
+	}
+	defer func() {
+		cancel()
+		err := agentCmd.Wait()
+		t.Logf("Agent result: %v, stdout/stderr: %q", err, out.String())
+	}()
+
+	// Send one request through the proxy to make sure the agent has come up.
+	//
+	// We give this initial request a long time to complete, as the agent takes
+	// a long time to start up.
+	testPath := "/some/request/path"
+	if err := checkRequest(proxyURL, testPath, testPath, time.Second, backendCookie); err != nil {
+		t.Fatalf("Failed to send the initial request: %v", err)
+	}
+
+	for i := 0; i < 10; i++ {
+		// The timeout below was chosen to be overly generous to prevent test flakiness.
+		//
+		// This has the consequence that it will only catch severe latency regressions.
+		//
+		// The specific value was chosen by running the test in a loop 100 times and
+		// incrementing the value until all 100 runs passed.
+		if err := checkRequest(proxyURL, testPath, testPath, 100*time.Millisecond, backendCookie); err != nil {
+			t.Fatalf("Failed to send request %d: %v", i, err)
+		}
+	}
+
+	agentCmd.Process.Signal(syscall.SIGINT)
+	waitCh := make(chan struct{})
+	waitCtx, _ := context.WithTimeout(ctx, 2*time.Second)
+	go func() {
+		agentCmd.Wait()
+		close(waitCh)
+	}()
+
+	for {
+		select {
+		case <-waitCh:
+			return
+		case <-waitCtx.Done():
+			t.Fatal("Timed out waiting for the agent to exit.")
+			return
 		}
 	}
 }
