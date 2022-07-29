@@ -18,6 +18,7 @@ package utils
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"io"
 	"io/ioutil"
@@ -141,7 +142,7 @@ func TestReadRequestWithRetries(t *testing.T) {
 		try++
 		if try == 1 {
 			// Simulate an error on first attempt - violating redirect policy.
-			w.WriteHeader(http.StatusMovedPermanently)
+			http.Redirect(w, r, r.URL.String(), http.StatusMovedPermanently)
 			return
 		}
 		if try == 2 {
