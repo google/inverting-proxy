@@ -29,7 +29,10 @@ import (
 	"math"
 	"math/rand"
 	"net/http"
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	"cloud.google.com/go/compute/metadata"
@@ -591,4 +594,19 @@ func ExponentialBackoffDuration(retryCount uint) time.Duration {
 func addJitter(duration time.Duration, jitterPercent float64) time.Duration {
 	jitter := 1 - jitterPercent + rand.Float64()*(jitterPercent*2)
 	return time.Duration(float64(duration.Nanoseconds())*jitter) * time.Nanosecond
+}
+
+func ShutdownSignalChan() <-chan struct{} {
+	// Listen for shutdown signal.
+	sigs := make(chan os.Signal, 1)
+	ch := make(chan struct{})
+
+	// SIGINT: The SIGINT (“program interrupt”) signal is sent when the user types the INTR character (Ctrl+C)
+	// SIGTERM: The SIGTERM signal is a generic signal used to cause program termination
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigs
+		close(ch)
+	}()
+	return ch
 }
