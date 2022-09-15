@@ -18,7 +18,7 @@ package banner
 
 import (
 	"bytes"
-	"context"
+	"golang.org/x/net/context"
 	"net/http"
 	"net/url"
 	"strings"

@@ -35,10 +35,10 @@ import (
 	"testing"
 	"time"
 
-	"context"
+	"golang.org/x/net/context"
 
-	"github.com/google/uuid"
 	"golang.org/x/net/publicsuffix"
+	"github.com/google/uuid"
 )
 
 const (
@@ -357,7 +357,7 @@ func TestGracefulShutdown(t *testing.T) {
 		"--proxy", proxyURL+"/",
 		"--host=localhost:"+parsedBackendURL.Port()),
 		" ")
-	agentCmd := exec.CommandContext(ctx, "/bin/bash", "-c", args)
+	agentCmd := exec.CommandContext(ctx, "/bin/bash", "-c", "/bin/bash", "-c", args)
 
 	var out bytes.Buffer
 	agentCmd.Stdout = &out

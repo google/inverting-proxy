@@ -31,6 +31,7 @@ limitations under the License.
 // app that integrates the proxy with the backend server(s).
 //
 // Example usage:
+//
 //	wrappedHandler := ...
 //	...
 //	sessionCookieName := "proxy-session-cookie-name"
@@ -51,10 +52,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/golang/groupcache/lru"
-	"github.com/google/inverting-proxy/agent/metrics"
-	"github.com/google/uuid"
 	"golang.org/x/net/publicsuffix"
+	"github.com/google/uuid"
+	"github.com/google/inverting-proxy/agent/metrics"
+	"github.com/golang/groupcache/lru"
 )
 
 type sessionResponseWriter struct {
