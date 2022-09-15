@@ -18,7 +18,7 @@ package banner
 
 import (
 	"bytes"
-	"context"
+	"golang.org/x/net/context"
 	"net/http"
 	"net/url"
 	"strings"
@@ -207,17 +207,9 @@ func (w *bannerResponseWriter) WriteHeader(statusCode int) {
 	w.wrapped.Write(banner)
 }
 
-func (w *bannerResponseWriter) Write(bs []byte) (int, error) {
-	if !w.wroteHeader {
-		w.WriteHeader(http.StatusOK)
-	}
-	if !w.writeBytes {
-		return len(bs), nil
-	}
-	return w.wrapped.Write(bs)
-}
+func (w *bannerResponseWriter) Write(bs []byte) (int, error)
 
-// Proxy builds an HTTP handler that proxies to a wrapped handler but injects the given HTML banner into every HTML response.
+// Proxy builds an HTTP handler that proxies to a wrapped handler, but injects the given HTML banner into every HTML response.
 func Proxy(ctx context.Context, wrapped http.Handler, bannerHTML, bannerHeight, favIconURL string, metricHandler *metrics.MetricHandler) (http.Handler, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

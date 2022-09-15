@@ -25,7 +25,7 @@ import (
 	"net/http"
 	"time"
 
-	"context"
+	"golang.org/x/net/context"
 
 	"github.com/gorilla/websocket"
 )

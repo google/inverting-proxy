@@ -35,10 +35,10 @@ import (
 	"testing"
 	"time"
 
-	"context"
+	"golang.org/x/net/context"
 
-	"github.com/google/uuid"
 	"golang.org/x/net/publicsuffix"
+	"github.com/google/uuid"
 )
 
 const (
@@ -88,7 +88,7 @@ func checkRequest(proxyURL, testPath, want string, timeout time.Duration, expect
 func RunLocalProxy(ctx context.Context, t *testing.T) (int, error) {
 	// This assumes that "Make build" has been run
 	proxyArgs := strings.Join(append(
-		[]string{"${GOPATH}/bin/inverting-proxy"},
+		[]string{"/home/runner/go/bin/inverting-proxy"},
 		"--port=0"),
 		" ")
 	proxyCmd := exec.CommandContext(ctx, "/bin/bash", "-c", proxyArgs)
@@ -204,7 +204,7 @@ func TestWithInMemoryProxyAndBackend(t *testing.T) {
 
 	// This assumes that "Make build" has been run
 	args := strings.Join(append(
-		[]string{"${GOPATH}/bin/proxy-forwarding-agent"},
+		[]string{"/home/runner/go/bin/proxy-forwarding-agent"},
 		"--debug=true",
 		"--backend=testBackend",
 		"--proxy", proxyURL+"/",
@@ -275,7 +275,7 @@ func TestWithInMemoryProxyAndBackendWithSessions(t *testing.T) {
 
 	// This assumes that "Make build" has been run
 	args := strings.Join(append(
-		[]string{"${GOPATH}/bin/proxy-forwarding-agent"},
+		[]string{"/home/runner/go/bin/proxy-forwarding-agent"},
 		"--debug=true",
 		"--backend=testBackend",
 		"--proxy", proxyURL+"/",
@@ -350,14 +350,14 @@ func TestGracefulShutdown(t *testing.T) {
 
 	// This assumes that "Make build" has been run
 	args := strings.Join(append(
-		[]string{"${GOPATH}/bin/proxy-forwarding-agent"},
+		[]string{"/home/runner/go/bin/proxy-forwarding-agent"},
 		"--debug=true",
 		"--graceful-shutdown-timeout=1s",
 		"--backend=testBackend",
 		"--proxy", proxyURL+"/",
 		"--host=localhost:"+parsedBackendURL.Port()),
 		" ")
-	agentCmd := exec.CommandContext(ctx, "/bin/bash", "-c", args)
+	agentCmd := exec.CommandContext(ctx, "/bin/bash", "-c", "/bin/bash", "-c", args)
 
 	var out bytes.Buffer
 	agentCmd.Stdout = &out

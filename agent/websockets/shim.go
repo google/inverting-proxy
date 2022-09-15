@@ -32,7 +32,8 @@ import (
 	"sync/atomic"
 	"text/template"
 
-	"context"
+	"golang.org/x/net/context"
+
 	"github.com/google/inverting-proxy/agent/metrics"
 )
 

@@ -27,7 +27,7 @@ limitations under the License.
 package main
 
 import (
-	"context"
+	"golang.org/x/net/context"
 	"flag"
 	"fmt"
 	"log"
@@ -38,10 +38,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golang/groupcache/lru"
 	"golang.org/x/net/publicsuffix"
-	"golang.org/x/oauth2/google"
 	compute "google.golang.org/api/compute/v1"
+	"golang.org/x/oauth2/google"
+	"github.com/golang/groupcache/lru"
 
 	"github.com/google/inverting-proxy/agent/banner"
 	"github.com/google/inverting-proxy/agent/metrics"
