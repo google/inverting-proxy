@@ -24,6 +24,8 @@ jobs:
     - name: Test
       run: gofmt -w ./
       
+    - run: echo "GOPATH"
+    - run: echo ${GOPATH}
     - run: go build -o /home/runner/go/bin/proxy-forwarding-agent ./agent/agent.go
     - run: go mod tidy
     - run: go build -o /home/runner/go/bin/inverting-proxy ./server/server.go
