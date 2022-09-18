@@ -24,14 +24,14 @@ jobs:
     - name: Test
       run: gofmt -w ./
       
-    - run: go build -o ${{ env.GOPATH }}/bin/proxy-forwarding-agent ./agent/agent.go
+    - run: go build -o /home/runner/go/bin/proxy-forwarding-agent ./agent/agent.go
     - run: go mod tidy
-    - run: go build -o ${{ env.GOPATH }}/bin/inverting-proxy ./server/server.go
+    - run: go build -o /home/runner/go/bin/inverting-proxy ./server/server.go
     - run: go mod tidy
-    - run: go build -o ${{ env.GOPATH }}/bin/inverting-proxy-run-local ./testing/runlocal/main.go
+    - run: go build -o /home/runner/go/bin/inverting-proxy-run-local ./testing/runlocal/main.go
     - run: go mod tidy
-    - run: go build -o ${{ env.GOPATH }}/bin/inverting-proxy-run-websockets ./testing/websockets/main.go
-    - run: go build -o ${{ env.GOPATH }}/bin/example-websocket-server ./testing/websockets/example/main.go
+    - run: go build -o /home/runner/go/bin/inverting-proxy-run-websockets ./testing/websockets/main.go
+    - run: go build -o /home/runner/go/bin/example-websocket-server ./testing/websockets/example/main.go
     - run: go mod tidy
     - run: go get ./...
     - run: go mod tidy
