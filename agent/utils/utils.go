@@ -19,7 +19,7 @@ package utils
 
 import (
 	"bufio"
-	"context"
+	"golang.org/x/net/context"
 	"encoding/json"
 	"errors"
 	"fmt"

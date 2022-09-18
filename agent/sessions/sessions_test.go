@@ -25,8 +25,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"golang.org/x/net/publicsuffix"
+	"github.com/google/uuid"
 )
 
 const (

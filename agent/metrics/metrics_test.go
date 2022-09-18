@@ -14,7 +14,7 @@ limitations under the License.
 package metrics
 
 import (
-	"context"
+	"golang.org/x/net/context"
 	"reflect"
 	"testing"
 

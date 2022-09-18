@@ -1,0 +1,54 @@
+name: Go
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+jobs:
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Go
+      uses: actions/setup-go@v3
+      with:
+        go-version: 1.18
+
+    - name: Build
+      run: go build -v ./...
+      
+    - name: Test
+      run: gofmt -w ./
+      
+    - run: echo "GOPATH"
+    - run: echo ${GOPATH}
+    - run: go build -o /home/runner/go/bin/proxy-forwarding-agent ./agent/agent.go
+    - run: go mod tidy
+    - run: go build -o /home/runner/go/bin/inverting-proxy ./server/server.go
+    - run: go mod tidy
+    - run: go build -o /home/runner/go/bin/inverting-proxy-run-local ./testing/runlocal/main.go
+    - run: go mod tidy
+    - run: go build -o /home/runner/go/bin/inverting-proxy-run-websockets ./testing/websockets/main.go
+    - run: go build -o /home/runner/go/bin/example-websocket-server ./testing/websockets/example/main.go
+    - run: go mod tidy
+    - run: go get ./...
+    - run: go mod tidy
+    - run: go vet ./agent/banner/...
+    - run: go vet ./agent/metrics/...
+    - run: go vet ./agent/sessions/...
+    - run: go vet ./agent/utils/...
+    - run: go vet ./agent/websockets/...
+    - run: go vet ./agent/agent.go
+    - run: go vet ./app/...
+    - run: go mod tidy
+    - run: go test ./agent/banner/...
+    - run: go test ./agent/metrics/...
+    - run: go test ./agent/sessions/...
+    - run: go test ./agent/utils/...
+    - run: go test ./agent/websockets/...
+    - run: go test -count 1 ./agent/agent_test.go
+    - run: go mod tidy
