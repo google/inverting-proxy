@@ -21,13 +21,13 @@ import (
 	"sync"
 	"time"
 
-	monitoring "cloud.google.com/go/monitoring/apiv3"
-	googlepb "github.com/golang/protobuf/ptypes/timestamp"
-	gax "github.com/googleapis/gax-go/v2"
-	apioption "google.golang.org/api/option"
 	metricpb "google.golang.org/genproto/googleapis/api/metric"
 	monitoredrespb "google.golang.org/genproto/googleapis/api/monitoredres"
+	googlepb "github.com/golang/protobuf/ptypes/timestamp"
+	monitoring "cloud.google.com/go/monitoring/apiv3"
+	gax "github.com/googleapis/gax-go/v2"
 	monitoringpb "google.golang.org/genproto/googleapis/monitoring/v3"
+	apioption "google.golang.org/api/option"
 )
 
 const (

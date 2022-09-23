@@ -18,7 +18,7 @@ limitations under the License.
 //
 // To deploy, export the ID of your project as ${PROJECT_ID} and then run:
 //
-//    $ make deploy
+//	$ make deploy
 package proxy
 
 import (

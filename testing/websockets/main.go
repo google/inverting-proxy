@@ -18,8 +18,9 @@ limitations under the License.
 // manually test changes to the code in the agent/websockets package
 //
 // Example usage:
-//   go build -o ~/bin/test-websocket-server testing/websockets/main.go
-//   ~/bin/test-websocket-server --port 8081 --backend http://localhost:8082
+//
+//	go build -o ~/bin/test-websocket-server testing/websockets/main.go
+//	~/bin/test-websocket-server --port 8081 --backend http://localhost:8082
 package main
 
 import (

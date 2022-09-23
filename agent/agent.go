@@ -38,10 +38,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golang/groupcache/lru"
 	"golang.org/x/net/publicsuffix"
-	"golang.org/x/oauth2/google"
 	compute "google.golang.org/api/compute/v1"
+	"golang.org/x/oauth2/google"
+	"github.com/golang/groupcache/lru"
 
 	"github.com/google/inverting-proxy/agent/banner"
 	"github.com/google/inverting-proxy/agent/metrics"
@@ -106,7 +106,7 @@ func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) 
 		var err error
 		// Note that we pass in the sessionHandler to the websocket proxy twice (h and sessionLRU.SessionHandler)
 		// h is the wrapped handler that will handle all non-websocket-shim requests
-		// sessionLRU.SessionHandler will be called for websocket open requests
+		// sessionLRU.SessionHandler will be called for websocket open requests.
 		// This is necessary to handle an edge case in session handling. Websocket open requests arrive with a path
 		// of `/$shimPath/open`. The original target URL and path are encoded in the request body, which is
 		// restored in the websocket handler. This means that attempting to restore session cookies that are

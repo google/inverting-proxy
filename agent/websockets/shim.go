@@ -33,6 +33,7 @@ import (
 	"text/template"
 
 	"context"
+
 	"github.com/google/inverting-proxy/agent/metrics"
 )
 
