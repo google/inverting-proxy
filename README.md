@@ -199,3 +199,7 @@ Currently, the App Engine version of the inverting proxy only supports HTTP
 requests. In particular, websockets are not supported, so you have to use an
 adapter like socket.io if you want to use the inverting proxy with a service
 that requires websockets.
+
+Additionally, the proxy agent will not work in combination with IAP, as it
+does not currently support using OIDC tokens to authenticate against the
+proxy.

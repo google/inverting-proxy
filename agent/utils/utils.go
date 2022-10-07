@@ -21,6 +21,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -28,7 +29,10 @@ import (
 	"math"
 	"math/rand"
 	"net/http"
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	"cloud.google.com/go/compute/metadata"
@@ -71,6 +75,15 @@ const (
 
 	// Time to wait on first retry
 	firstRetryWaitDuration = time.Millisecond
+
+	// Max number of retries to perform in case of failed read request calls
+	maxReadRequestRetryCount = 2
+
+	// Max number of retries to perform in case of failed write response calls
+	maxWriteResponseRetryCount = 2
+
+	// Size of the buffer that stores the beginning of read response body
+	readResponseBufSize = 4096
 )
 
 var (
@@ -231,6 +244,28 @@ func ListPendingRequests(client *http.Client, proxyHost, backendID string, metri
 	return parseRequestIDs(proxyResp, metricHandler)
 }
 
+func getRequestWithRetries(client *http.Client, proxyURL, backendID, requestID string) (*http.Response, error) {
+	proxyReq, err := http.NewRequest(http.MethodGet, proxyURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	proxyReq.Header.Add(HeaderBackendID, backendID)
+	proxyReq.Header.Add(HeaderRequestID, requestID)
+	var proxyResp *http.Response
+	for retryCount := 0; retryCount <= maxReadRequestRetryCount; retryCount++ {
+		proxyResp, err = client.Do(proxyReq)
+		if err != nil {
+			continue
+		}
+		if 500 <= proxyResp.StatusCode && proxyResp.StatusCode < 600 {
+			proxyResp.Body.Close()
+			continue
+		}
+		return proxyResp, nil
+	}
+	return proxyResp, err
+}
+
 func parseRequestFromProxyResponse(backendID, requestID string, proxyResp *http.Response, metricHandler *metrics.MetricHandler) (*ForwardedRequest, error) {
 	user := proxyResp.Header.Get(HeaderUserID)
 	startTimeStr := proxyResp.Header.Get(HeaderRequestStartTime)
@@ -263,13 +298,7 @@ func parseRequestFromProxyResponse(backendID, requestID string, proxyResp *http.
 // If the returned request is non-nil, then it is passed to the provided callback.
 func ReadRequest(client *http.Client, proxyHost, backendID, requestID string, callback RequestCallback, metricHandler *metrics.MetricHandler) error {
 	proxyURL := proxyHost + RequestPath
-	proxyReq, err := http.NewRequest(http.MethodGet, proxyURL, nil)
-	if err != nil {
-		return err
-	}
-	proxyReq.Header.Add(HeaderBackendID, backendID)
-	proxyReq.Header.Add(HeaderRequestID, requestID)
-	proxyResp, err := client.Do(proxyReq)
+	proxyResp, err := getRequestWithRetries(client, proxyURL, backendID, requestID)
 	if err != nil {
 		return fmt.Errorf("A proxy request failed: %q", err.Error())
 	}
@@ -327,6 +356,77 @@ type ResponseForwarder struct {
 	metricHandler *metrics.MetricHandler
 }
 
+func newBufferedReadSeeker(r io.Reader, bufSize int) *bufferedReadSeeker {
+	return &bufferedReadSeeker{
+		r:         r,
+		buf:       make([]byte, bufSize),
+		writeHead: 0,
+		readHead:  0,
+	}
+}
+
+type bufferedReadSeeker struct {
+	r         io.Reader
+	buf       []byte
+	writeHead int
+	readHead  int
+}
+
+func (b *bufferedReadSeeker) Read(p []byte) (int, error) {
+	// Read from buffer.
+	readFromBuf := copy(p, b.buf[b.readHead:b.writeHead])
+	b.readHead += readFromBuf
+	// Read from wrapped source and write to buffer.
+	readFromSource, err := b.r.Read(p[readFromBuf:])
+	written := copy(b.buf[b.writeHead:], p[readFromBuf:(readFromBuf+readFromSource)])
+	b.writeHead += written
+	b.readHead += written
+	return readFromBuf + readFromSource, err
+}
+
+func (b *bufferedReadSeeker) Seek(offset int64, whence int) (int64, error) {
+	if whence != io.SeekStart {
+		return 0, errors.New("only SeekStart offset is supported")
+	}
+	if offset < 0 || offset >= int64(len(b.buf)) {
+		return 0, errors.New("invalid offset value")
+	}
+	if b.writeHead >= len(b.buf) {
+		return 0, errors.New("cannot seek, possible buffer overflow")
+	}
+	b.readHead = int(offset)
+	return int64(b.readHead), nil
+}
+
+func postResponseWithRetries(client *http.Client, proxyURL, backendID, requestID string, proxyReader io.Reader) error {
+	proxyReadSeeker := newBufferedReadSeeker(proxyReader, readResponseBufSize)
+	proxyReq, err := http.NewRequest(http.MethodPost, proxyURL, proxyReadSeeker)
+	if err != nil {
+		return err
+	}
+	proxyReq.Header.Set(HeaderBackendID, backendID)
+	proxyReq.Header.Set(HeaderRequestID, requestID)
+	proxyReq.Header.Set("Content-Type", "text/plain")
+	var proxyResp *http.Response
+	for retryCount := 0; retryCount <= maxWriteResponseRetryCount; retryCount++ {
+		if proxyResp, err = client.Do(proxyReq); err != nil {
+			if _, seekErr := proxyReadSeeker.Seek(0, io.SeekStart); seekErr != nil {
+				return err
+			}
+			continue
+		}
+		proxyResp.Body.Close()
+		if 500 <= proxyResp.StatusCode && proxyResp.StatusCode < 600 {
+			if _, seekErr := proxyReadSeeker.Seek(0, io.SeekStart); seekErr != nil {
+				return err
+			}
+			continue
+		}
+		return nil
+	}
+	return err
+}
+
 // NewResponseForwarder constructs a new ResponseForwarder that forwards to the
 // given proxy for the specified request.
 func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID string) (*ResponseForwarder, error) {
@@ -344,13 +444,6 @@ func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID s
 	responseBodyReader, responseBodyWriter := io.Pipe()
 
 	proxyURL := proxyHost + ResponsePath
-	proxyReq, err := http.NewRequest(http.MethodPost, proxyURL, proxyReader)
-	if err != nil {
-		return nil, err
-	}
-	proxyReq.Header.Set(HeaderBackendID, backendID)
-	proxyReq.Header.Set(HeaderRequestID, requestID)
-	proxyReq.Header.Set("Content-Type", "text/plain")
 
 	proxyClientErrChan := make(chan error, 100)
 	forwardingErrChan := make(chan error, 100)
@@ -367,9 +460,10 @@ func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID s
 		// token expires between the header being generated
 		// and the request being sent to the proxy.
 		<-startedChan
-		if _, err := client.Do(proxyReq); err != nil {
+		if err := postResponseWithRetries(client, proxyURL, backendID, requestID, proxyReader); err != nil {
 			proxyClientErrChan <- err
 		}
+		proxyReader.Close()
 		close(proxyClientErrChan)
 	}()
 
@@ -500,4 +594,19 @@ func ExponentialBackoffDuration(retryCount uint) time.Duration {
 func addJitter(duration time.Duration, jitterPercent float64) time.Duration {
 	jitter := 1 - jitterPercent + rand.Float64()*(jitterPercent*2)
 	return time.Duration(float64(duration.Nanoseconds())*jitter) * time.Nanosecond
+}
+
+func ShutdownSignalChan() <-chan struct{} {
+	// Listen for shutdown signal.
+	sigs := make(chan os.Signal, 1)
+	ch := make(chan struct{})
+
+	// SIGINT: The SIGINT (“program interrupt”) signal is sent when the user types the INTR character (Ctrl+C)
+	// SIGTERM: The SIGTERM signal is a generic signal used to cause program termination
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigs
+		close(ch)
+	}()
+	return ch
 }
