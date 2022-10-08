@@ -17,9 +17,8 @@ limitations under the License.
 package proxy
 
 import (
+	"context"
 	"time"
-
-	"golang.org/x/net/context"
 )
 
 // Request represents an end-user request that we forward.

@@ -17,12 +17,11 @@ limitations under the License.
 package proxy
 
 import (
+	"context"
 	"fmt"
 	"time"
 
-	"golang.org/x/net/context"
-
-	"google.golang.org/appengine/memcache"
+	"google.golang.org/appengine/v2/memcache"
 )
 
 const (

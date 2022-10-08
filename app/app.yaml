@@ -13,9 +13,9 @@
 # limitations under the License.
 
 runtime: go116
-
+app_engine_apis: true
 handlers:
   - url: /.*
     secure: always
     login: required
-    script: _go_app
+    script: auto
