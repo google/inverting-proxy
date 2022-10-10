@@ -17,15 +17,14 @@ limitations under the License.
 package proxy
 
 import (
+	"context"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
 
-	"golang.org/x/net/context"
-
-	"google.golang.org/appengine/datastore"
-	"google.golang.org/appengine/log"
+	"google.golang.org/appengine/v2/datastore"
 )
 
 const (
@@ -112,7 +111,7 @@ func newBlob(ctx context.Context, bytes []byte, blobName string, t time.Time) (*
 
 	blobPartNames, err := writeBlobParts(ctx, bytes[fieldByteLimit:], blobName, t)
 	if err != nil {
-		log.Errorf(ctx, "Failed to write the parts of a blob: %q", err.Error())
+		log.Printf("Failed to write the parts of a blob: %q", err.Error())
 		return nil, err
 	}
 	b := &blob{
@@ -136,7 +135,7 @@ func (bp *blob) read(ctx context.Context) ([]byte, error) {
 	}
 
 	if err := datastore.GetMulti(ctx, keys, parts); err != nil {
-		log.Errorf(ctx, "Failed to read the parts of a blob: %q", err.Error())
+		log.Printf("Failed to read the parts of a blob: %q", err.Error())
 		return nil, err
 	}
 	for _, part := range parts {
@@ -293,7 +292,7 @@ func (d *persistentStore) ListPendingRequests(ctx context.Context, backendID str
 	go func() {
 		defer wg.Done()
 		if err := d.registerBackendAsSeen(ctx, backendID); err != nil {
-			log.Errorf(ctx, "Failed to register a backend [%q]: %q", backendID, err.Error())
+			log.Printf("Failed to register a backend [%q]: %q", backendID, err.Error())
 		}
 	}()
 	go func() {
@@ -324,7 +323,7 @@ func (d *persistentStore) WriteResponse(ctx context.Context, r *Response) error 
 		defer wg.Done()
 		backendID := r.BackendID
 		if err := d.registerBackendAsActive(ctx, backendID); err != nil {
-			log.Errorf(ctx, "Failed to update a backend's activity tracker [%q]: %q", backendID, err.Error())
+			log.Printf("Failed to update a backend's activity tracker [%q]: %q", backendID, err.Error())
 		}
 	}()
 	go func() {

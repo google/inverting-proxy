@@ -14,10 +14,8 @@
 
 runtime: go116
 service: agent
-
+app_engine_apis: true
 handlers:
   - url: /agent/.*
     secure: always
-    script: _go_app
-
-
+    script: auto
