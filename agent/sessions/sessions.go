@@ -31,6 +31,7 @@ limitations under the License.
 // app that integrates the proxy with the backend server(s).
 //
 // Example usage:
+//
 //	wrappedHandler := ...
 //	...
 //	sessionCookieName := "proxy-session-cookie-name"

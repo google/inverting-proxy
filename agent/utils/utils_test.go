@@ -178,45 +178,45 @@ func TestReadRequestWithRetries(t *testing.T) {
 }
 
 func TestBufferedReadSeeker(t *testing.T) {
-        r := bytes.NewReader([]byte{1, 2, 3, 4, 5, 6, 7, 8, 9})
-        brs := newBufferedReadSeeker(r, 5)
-        p1 := make([]byte, 4)
-        p2 := make([]byte, 6)
-        wantN := 2
-        wantO := int64(0)
+	r := bytes.NewReader([]byte{1, 2, 3, 4, 5, 6, 7, 8, 9})
+	brs := newBufferedReadSeeker(r, 5)
+	p1 := make([]byte, 4)
+	p2 := make([]byte, 6)
+	wantN := 2
+	wantO := int64(0)
 
-        // Pass 1: read 2 + 2 = 4 bytes, which is less than buffer size.
-        if gotN, gotErr := brs.Read(p1[0:2]); gotN != wantN || gotErr != nil {
-                t.Errorf("Read(pass 1 part 1): got %v, %v; want %v, %v", gotN, gotErr, wantN, nil)
-        }
-        if gotN, gotErr := brs.Read(p1[2:4]); gotN != wantN || gotErr != nil {
-                t.Errorf("Read(pass 1 part 2): got %v, %v; want %v, %v", gotN, gotErr, wantN, nil)
-        }
-        // Reset offset to 0: succeeds because the buffer has not been filled up.
-        if gotO, gotErr := brs.Seek(0, io.SeekStart); gotO != wantO || gotErr != nil {
-                t.Errorf("Seek(buffer not filled up): got %v, %v; want %v, %v", gotO, gotErr, wantO, nil)
-        }
-        // Pass 2: read 2 + 2 + 2 = 6 bytes, which exceeds buffer size.
-        if gotN, gotErr := brs.Read(p2[0:2]); gotN != wantN || gotErr != nil {
-                t.Errorf("Read(pass 2 part 1): got %v, %v; want %v, %v", gotN, gotErr, wantN, nil)
-        }
-        if gotN, gotErr := brs.Read(p2[2:4]); gotN != wantN || gotErr != nil {
-                t.Errorf("Read(pass 2 part 2): got %v, %v; want %v, %v", gotN, gotErr, wantN, nil)
-        }
-        if gotN, gotErr := brs.Read(p2[4:6]); gotN != wantN || gotErr != nil {
-                t.Errorf("Read(pass 2 part 3): got %v, %v; want %v, %v", gotN, gotErr, wantN, nil)
-        }
-        // Reset offset to 0: fails because the buffer has been filled up.
-        if gotO, gotErr := brs.Seek(0, io.SeekStart); gotErr == nil {
-                t.Errorf("Seek(buffer filled up): got %v, %v; want error", gotO, gotErr)
-        }
+	// Pass 1: read 2 + 2 = 4 bytes, which is less than buffer size.
+	if gotN, gotErr := brs.Read(p1[0:2]); gotN != wantN || gotErr != nil {
+		t.Errorf("Read(pass 1 part 1): got %v, %v; want %v, %v", gotN, gotErr, wantN, nil)
+	}
+	if gotN, gotErr := brs.Read(p1[2:4]); gotN != wantN || gotErr != nil {
+		t.Errorf("Read(pass 1 part 2): got %v, %v; want %v, %v", gotN, gotErr, wantN, nil)
+	}
+	// Reset offset to 0: succeeds because the buffer has not been filled up.
+	if gotO, gotErr := brs.Seek(0, io.SeekStart); gotO != wantO || gotErr != nil {
+		t.Errorf("Seek(buffer not filled up): got %v, %v; want %v, %v", gotO, gotErr, wantO, nil)
+	}
+	// Pass 2: read 2 + 2 + 2 = 6 bytes, which exceeds buffer size.
+	if gotN, gotErr := brs.Read(p2[0:2]); gotN != wantN || gotErr != nil {
+		t.Errorf("Read(pass 2 part 1): got %v, %v; want %v, %v", gotN, gotErr, wantN, nil)
+	}
+	if gotN, gotErr := brs.Read(p2[2:4]); gotN != wantN || gotErr != nil {
+		t.Errorf("Read(pass 2 part 2): got %v, %v; want %v, %v", gotN, gotErr, wantN, nil)
+	}
+	if gotN, gotErr := brs.Read(p2[4:6]); gotN != wantN || gotErr != nil {
+		t.Errorf("Read(pass 2 part 3): got %v, %v; want %v, %v", gotN, gotErr, wantN, nil)
+	}
+	// Reset offset to 0: fails because the buffer has been filled up.
+	if gotO, gotErr := brs.Seek(0, io.SeekStart); gotErr == nil {
+		t.Errorf("Seek(buffer filled up): got %v, %v; want error", gotO, gotErr)
+	}
 
-        if got, want := p1, []byte{1, 2, 3, 4}; !bytes.Equal(got, want) {
-                t.Errorf("Unexpected values read in pass 1: got %v, want %v", got, want)
-        }
-        if got, want := p2, []byte{1, 2, 3, 4, 5, 6}; !bytes.Equal(got, want) {
-                t.Errorf("Unexpected values read in pass 2: got %v, want %v", got, want)
-        }
+	if got, want := p1, []byte{1, 2, 3, 4}; !bytes.Equal(got, want) {
+		t.Errorf("Unexpected values read in pass 1: got %v, want %v", got, want)
+	}
+	if got, want := p2, []byte{1, 2, 3, 4, 5, 6}; !bytes.Equal(got, want) {
+		t.Errorf("Unexpected values read in pass 2: got %v, want %v", got, want)
+	}
 }
 
 func TestResponseForwarder(t *testing.T) {
