@@ -17,8 +17,9 @@ limitations under the License.
 // Command server launches a stand-alone inverting proxy.
 //
 // Example usage:
-//   go build -o ~/bin/inverting-proxy ./server/server.go
-//   ~/bin/inverting-proxy --port 8081
+//
+//	go build -o ~/bin/inverting-proxy ./server/server.go
+//	~/bin/inverting-proxy --port 8081
 package main
 
 import (
