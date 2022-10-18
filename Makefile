@@ -1,5 +1,5 @@
 build:	test
-	go build ./app
+	go build ./app/...
 	go mod tidy
 
 test:	buildrunlocal buildrunwebsockets
