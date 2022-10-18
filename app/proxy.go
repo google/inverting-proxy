@@ -36,7 +36,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/inverting-proxy/app/proxy"
+	"github.com/google/inverting-proxy/app/cache"
+	"github.com/google/inverting-proxy/app/store"
+	"github.com/google/inverting-proxy/app/types"
 
 	"google.golang.org/appengine/v2"
 	"google.golang.org/appengine/v2/datastore"
@@ -61,7 +63,7 @@ const (
 	HeaderRequestStartTime = "X-Inverting-Proxy-Request-Start-Time"
 )
 
-func waitForNextRequests(ctx context.Context, s proxy.Store, backendID string) ([]string, error) {
+func waitForNextRequests(ctx context.Context, s types.Store, backendID string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, requestsWaitTimeout)
 	defer cancel()
 	for {
@@ -82,7 +84,7 @@ func waitForNextRequests(ctx context.Context, s proxy.Store, backendID string) (
 	}
 }
 
-func waitForResponse(ctx context.Context, s proxy.Store, backendID, requestID string) ([]byte, error) {
+func waitForResponse(ctx context.Context, s types.Store, backendID, requestID string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, responseWaitTimeout)
 	defer cancel()
 	for {
@@ -103,15 +105,15 @@ func waitForResponse(ctx context.Context, s proxy.Store, backendID, requestID st
 	}
 }
 
-func postRequest(ctx context.Context, s proxy.Store, backendID, requestID, userEmail string, requestBytes []byte) (*proxy.Request, error) {
-	request := proxy.NewRequest(backendID, requestID, userEmail, requestBytes)
+func postRequest(ctx context.Context, s types.Store, backendID, requestID, userEmail string, requestBytes []byte) (*types.Request, error) {
+	request := types.NewRequest(backendID, requestID, userEmail, requestBytes)
 	if err := s.WriteRequest(ctx, request); err != nil {
 		return nil, err
 	}
 	return request, nil
 }
 
-func parseResponse(backendID string, r *http.Request) (*proxy.Response, error) {
+func parseResponse(backendID string, r *http.Request) (*types.Response, error) {
 	requestID := r.Header.Get(HeaderRequestID)
 	if requestID == "" {
 		return nil, errors.New("No request ID specified")
@@ -120,14 +122,14 @@ func parseResponse(backendID string, r *http.Request) (*proxy.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &proxy.Response{
+	return &types.Response{
 		BackendID: backendID,
 		RequestID: requestID,
 		Contents:  responseBytes,
 	}, nil
 }
 
-func postResponse(ctx context.Context, s proxy.Store, response *proxy.Response, errChan chan error) {
+func postResponse(ctx context.Context, s types.Store, response *types.Response, errChan chan error) {
 	backendID := response.BackendID
 	requestID := response.RequestID
 	log.Printf("Responding to request [%q] for the backend %q", requestID, backendID)
@@ -155,7 +157,7 @@ func postResponse(ctx context.Context, s proxy.Store, response *proxy.Response, 
 	wg.Wait()
 }
 
-func checkBackendID(ctx context.Context, s proxy.Store, r *http.Request) (string, error) {
+func checkBackendID(ctx context.Context, s types.Store, r *http.Request) (string, error) {
 	oauthUser, err := user.CurrentOAuth(ctx, "https://www.googleapis.com/auth/cloud-platform")
 	if err != nil {
 		return "", fmt.Errorf("Failed to read the OAuth authorization header: %q", err.Error())
@@ -176,7 +178,7 @@ func checkBackendID(ctx context.Context, s proxy.Store, r *http.Request) (string
 	return backendID, nil
 }
 
-func pendingHandler(ctx context.Context, s proxy.Store, w http.ResponseWriter, r *http.Request) {
+func pendingHandler(ctx context.Context, s types.Store, w http.ResponseWriter, r *http.Request) {
 	backendID, err := checkBackendID(ctx, s, r)
 	if err != nil {
 		log.Printf("Failed to validate backend ID: %q", err.Error())
@@ -198,7 +200,7 @@ func pendingHandler(ctx context.Context, s proxy.Store, w http.ResponseWriter, r
 	w.Write(requestsBytes)
 }
 
-func requestHandler(ctx context.Context, s proxy.Store, w http.ResponseWriter, r *http.Request) {
+func requestHandler(ctx context.Context, s types.Store, w http.ResponseWriter, r *http.Request) {
 	backendID, err := checkBackendID(ctx, s, r)
 	if err != nil {
 		log.Printf("Failed to validate backend ID: %q", err.Error())
@@ -228,7 +230,7 @@ func requestHandler(ctx context.Context, s proxy.Store, w http.ResponseWriter, r
 	w.Write(request.Contents)
 }
 
-func responseHandler(ctx context.Context, s proxy.Store, w http.ResponseWriter, r *http.Request) {
+func responseHandler(ctx context.Context, s types.Store, w http.ResponseWriter, r *http.Request) {
 	backendID, err := checkBackendID(ctx, s, r)
 	if err != nil {
 		log.Printf("Failed to validate backend ID: %q", err.Error())
@@ -255,7 +257,7 @@ func responseHandler(ctx context.Context, s proxy.Store, w http.ResponseWriter, 
 	w.WriteHeader(http.StatusOK)
 }
 
-func deleteHandler(ctx context.Context, s proxy.Store, w http.ResponseWriter, r *http.Request) {
+func deleteHandler(ctx context.Context, s types.Store, w http.ResponseWriter, r *http.Request) {
 	log.Printf("Deleting old data")
 	if err := s.DeleteOldBackends(ctx); err != nil {
 		log.Printf("Failed to delete old backend data: %q", err.Error())
@@ -305,7 +307,7 @@ func readCachedResponse(ctx context.Context, cacheKey string, r *http.Request) (
 	return http.ReadResponse(responseReader, r)
 }
 
-func proxyHandler(ctx context.Context, s proxy.Store, requestID string, w http.ResponseWriter, r *http.Request) {
+func proxyHandler(ctx context.Context, s types.Store, requestID string, w http.ResponseWriter, r *http.Request) {
 	currentUser := user.Current(ctx)
 	if currentUser == nil {
 		http.Error(w, "You must be signed in to App Engine", http.StatusUnauthorized)
@@ -374,13 +376,13 @@ func proxyHandler(ctx context.Context, s proxy.Store, requestID string, w http.R
 	forwardResponse(ctx, requestID, w, response)
 }
 
-func parseBackend(r *http.Request) (*proxy.Backend, error) {
+func parseBackend(r *http.Request) (*types.Backend, error) {
 	requestBytes, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		return nil, err
 	}
 
-	var backend proxy.Backend
+	var backend types.Backend
 	if err := json.Unmarshal(requestBytes, &backend); err != nil {
 		return nil, err
 	}
@@ -392,7 +394,7 @@ func parseBackend(r *http.Request) (*proxy.Backend, error) {
 	return &backend, nil
 }
 
-func addBackendHandler(ctx context.Context, s proxy.Store, w http.ResponseWriter, r *http.Request) {
+func addBackendHandler(ctx context.Context, s types.Store, w http.ResponseWriter, r *http.Request) {
 	backend, err := parseBackend(r)
 	if err != nil {
 		log.Printf("Failed to parse the backend: %q", err.Error())
@@ -408,7 +410,7 @@ func addBackendHandler(ctx context.Context, s proxy.Store, w http.ResponseWriter
 	w.WriteHeader(http.StatusOK)
 }
 
-func listBackendsHandler(ctx context.Context, s proxy.Store, w http.ResponseWriter, r *http.Request) {
+func listBackendsHandler(ctx context.Context, s types.Store, w http.ResponseWriter, r *http.Request) {
 	backends, err := s.ListBackends(ctx)
 	if err != nil {
 		log.Printf("Failed to list backends: %q", err.Error())
@@ -426,7 +428,7 @@ func listBackendsHandler(ctx context.Context, s proxy.Store, w http.ResponseWrit
 	w.Write(responseBytes)
 }
 
-func deleteBackendHandler(ctx context.Context, s proxy.Store, w http.ResponseWriter, r *http.Request) {
+func deleteBackendHandler(ctx context.Context, s types.Store, w http.ResponseWriter, r *http.Request) {
 	backendID := strings.TrimPrefix(r.URL.Path, "/api/backends/")
 	if backendID == "" {
 		http.Error(w, "No backend specified", http.StatusBadRequest)
@@ -453,7 +455,7 @@ func isAPIRequest(ctx context.Context) bool {
 }
 
 // handleAgentRequest routes a request from a forwarding agent to the appropriate request handler.
-func handleAgentRequest(ctx context.Context, s proxy.Store, w http.ResponseWriter, r *http.Request) {
+func handleAgentRequest(ctx context.Context, s types.Store, w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(r.URL.Path, "/agent/pending") {
 		pendingHandler(ctx, s, w, r)
 		return
@@ -488,7 +490,7 @@ func isAdminRequest(ctx context.Context) bool {
 }
 
 // handleAPIRequest routes an API request from an app administrator to the appropriate request handler.
-func handleAPIRequest(ctx context.Context, s proxy.Store, w http.ResponseWriter, r *http.Request) {
+func handleAPIRequest(ctx context.Context, s types.Store, w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/cron/delete" {
 		// We don't check the user identity here as this path is restricted to admin users.
 		deleteHandler(ctx, s, w, r)
@@ -529,7 +531,7 @@ func handleAPIRequest(ctx context.Context, s proxy.Store, w http.ResponseWriter,
 }
 
 func init() {
-	s := proxy.NewCachingStore(proxy.NewPersistentStore())
+	s := cache.NewCachingStore(store.NewPersistentStore())
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		ctx := appengine.NewContext(r)
 		if isAgentRequest(ctx) {

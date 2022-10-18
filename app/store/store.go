@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package proxy
+package store
 
 import (
 	"context"
@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/inverting-proxy/app/types"
 	"google.golang.org/appengine/v2/datastore"
 )
 
@@ -162,7 +163,7 @@ func (r *storedRequest) datastoreKey(ctx context.Context) *datastore.Key {
 	return datastore.NewKey(ctx, requestKind(r.BackendID), r.RequestID, 0, nil)
 }
 
-func newStoredRequest(ctx context.Context, r *Request) (*storedRequest, error) {
+func newStoredRequest(ctx context.Context, r *types.Request) (*storedRequest, error) {
 	sr := &storedRequest{
 		BackendID: r.BackendID,
 		RequestID: r.RequestID,
@@ -191,12 +192,12 @@ func readStoredRequest(ctx context.Context, backendID, requestID string) (*store
 	return &r, nil
 }
 
-func (r *storedRequest) toRequest(ctx context.Context) (*Request, error) {
+func (r *storedRequest) toRequest(ctx context.Context) (*types.Request, error) {
 	requestBytes, err := r.RequestBytes.read(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return &Request{
+	return &types.Request{
 		BackendID: r.BackendID,
 		RequestID: r.RequestID,
 		User:      r.User,
@@ -219,7 +220,7 @@ func (r *storedResponse) datastoreKey(ctx context.Context) *datastore.Key {
 	return datastore.NewKey(ctx, responseKind, r.RequestID, 0, nil)
 }
 
-func newStoredResponse(ctx context.Context, r *Response) (*storedResponse, error) {
+func newStoredResponse(ctx context.Context, r *types.Response) (*storedResponse, error) {
 	sr := &storedResponse{
 		BackendID:    r.BackendID,
 		RequestID:    r.RequestID,
@@ -247,12 +248,12 @@ func readStoredResponse(ctx context.Context, backendID, requestID string) (*stor
 	return &r, nil
 }
 
-func (r *storedResponse) toResponse(ctx context.Context) (*Response, error) {
+func (r *storedResponse) toResponse(ctx context.Context) (*types.Response, error) {
 	responseBytes, err := r.ResponseBytes.read(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return &Response{
+	return &types.Response{
 		BackendID: r.BackendID,
 		RequestID: r.RequestID,
 		Contents:  responseBytes,
@@ -264,18 +265,18 @@ type persistentStore struct{}
 
 // NewPersistentStore returns a new implementation of the Store interface that uses the
 // Google Cloud Datastore as its backing implementation.
-func NewPersistentStore() Store {
+func NewPersistentStore() types.Store {
 	return &persistentStore{}
 }
 
 // WriteRequest writes the given request to the Datastore.
-func (d *persistentStore) WriteRequest(ctx context.Context, r *Request) error {
+func (d *persistentStore) WriteRequest(ctx context.Context, r *types.Request) error {
 	_, err := newStoredRequest(ctx, r)
 	return err
 }
 
 // ReadRequest reads the specified request from the Datastore.
-func (d *persistentStore) ReadRequest(ctx context.Context, backendID, requestID string) (*Request, error) {
+func (d *persistentStore) ReadRequest(ctx context.Context, backendID, requestID string) (*types.Request, error) {
 	sr, err := readStoredRequest(ctx, backendID, requestID)
 	if err != nil {
 		return nil, err
@@ -315,7 +316,7 @@ func (d *persistentStore) ListPendingRequests(ctx context.Context, backendID str
 }
 
 // WriteResponse writes the given response to the Datastore.
-func (d *persistentStore) WriteResponse(ctx context.Context, r *Response) error {
+func (d *persistentStore) WriteResponse(ctx context.Context, r *types.Response) error {
 	var err error
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -337,7 +338,7 @@ func (d *persistentStore) WriteResponse(ctx context.Context, r *Response) error 
 // ReadResponse reads from the Datastore the response to the specified request.
 //
 // If there is no response yet, then the returned value is nil.
-func (d *persistentStore) ReadResponse(ctx context.Context, backendID, requestID string) (*Response, error) {
+func (d *persistentStore) ReadResponse(ctx context.Context, backendID, requestID string) (*types.Response, error) {
 	sr, err := readStoredResponse(ctx, backendID, requestID)
 	if err != nil {
 		return nil, err
@@ -512,7 +513,7 @@ func backendLastActive(ctx context.Context, backendID string) time.Time {
 }
 
 // AddBackend adds the definition of the backend to the store.
-func (d *persistentStore) AddBackend(ctx context.Context, backend *Backend) error {
+func (d *persistentStore) AddBackend(ctx context.Context, backend *types.Backend) error {
 	// We never store the last-used value in the store. It is an output-only
 	// field that is calculated dynamically.
 	backend.LastUsed = ""
@@ -536,15 +537,15 @@ func (d *persistentStore) AddBackend(ctx context.Context, backend *Backend) erro
 }
 
 // ListBackends lists all of the backends.
-func (d *persistentStore) ListBackends(ctx context.Context) ([]*Backend, error) {
-	var backends []*Backend
+func (d *persistentStore) ListBackends(ctx context.Context) ([]*types.Backend, error) {
+	var backends []*types.Backend
 	q := datastore.NewQuery(backendKind).Distinct()
 	_, err := q.GetAll(ctx, &backends)
 	if err != nil {
 		return nil, fmt.Errorf("Failed to query the backends: %q", err.Error())
 	}
 	if backends == nil {
-		return []*Backend{}, nil
+		return []*types.Backend{}, nil
 	}
 	for _, b := range backends {
 		b.LastUsed = backendLastActive(ctx, b.BackendID).Format(time.RFC3339)
@@ -573,7 +574,7 @@ func (d *persistentStore) DeleteBackend(ctx context.Context, backendID string) e
 	return deleteRequestsForBackend(ctx, backendID, time.Now())
 }
 
-func mostSpecificMatchingBackend(path string, backends []*Backend) (string, error) {
+func mostSpecificMatchingBackend(path string, backends []*types.Backend) (string, error) {
 	var closestMatch string
 	var longestMatchingPath string
 	for _, b := range backends {
@@ -594,7 +595,7 @@ func mostSpecificMatchingBackend(path string, backends []*Backend) (string, erro
 
 // lookupSharedBackend looks up a backend that can serve all users for the given path.
 func (d *persistentStore) lookupSharedBackend(ctx context.Context, path string) (string, error) {
-	var backends []*Backend
+	var backends []*types.Backend
 	q := datastore.NewQuery(backendKind).Filter("EndUser=", sharedBackendUser).Distinct()
 	if _, err := q.GetAll(ctx, &backends); err != nil {
 		return "", fmt.Errorf("Failed to query the backends: %q", err.Error())
@@ -611,7 +612,7 @@ func (d *persistentStore) lookupSharedBackend(ctx context.Context, path string) 
 
 // LookupBackend looks up the backend for the given user and path.
 func (d *persistentStore) LookupBackend(ctx context.Context, endUser, path string) (string, error) {
-	var backends []*Backend
+	var backends []*types.Backend
 	q := datastore.NewQuery(backendKind).Filter("EndUser=", endUser).Distinct()
 	if _, err := q.GetAll(ctx, &backends); err != nil {
 		return "", fmt.Errorf("Failed to query the backends: %q", err.Error())
@@ -629,7 +630,7 @@ func (d *persistentStore) LookupBackend(ctx context.Context, endUser, path strin
 // IsBackendUserAllowed checks whether the given user can act as the specified backend.
 func (d *persistentStore) IsBackendUserAllowed(ctx context.Context, backendUser, backendID string) (bool, error) {
 	key := datastore.NewKey(ctx, backendKind, backendID, 0, nil)
-	var b Backend
+	var b types.Backend
 	if err := datastore.Get(ctx, key, &b); err != nil {
 		if err == datastore.ErrNoSuchEntity {
 			return false, nil
