@@ -144,7 +144,7 @@ func forwardRequest(client *http.Client, hostProxy http.Handler, request *utils.
 	if *stripCredentials {
 		httpRequest.Header.Del(headerAuthorization)
 	}
-	responseForwarder, err := utils.NewResponseForwarder(client, *proxy, request.BackendID, request.RequestID)
+	responseForwarder, err := utils.NewResponseForwarder(client, *proxy, request.BackendID, request.RequestID, request.Contents)
 	if err != nil {
 		return fmt.Errorf("failed to create the response forwarder: %v", err)
 	}
