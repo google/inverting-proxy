@@ -235,6 +235,9 @@ func TestResponseForwarder(t *testing.T) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		if got, want := response.Proto, endUserRequest.Proto; got != want {
+			t.Errorf("Unexpected response proto: got %q, want %q", got, want)
+		}
 		responseBytes, err := ioutil.ReadAll(response.Body)
 		if err != nil {
 			t.Errorf("Failure reading the response body: %v", err)
@@ -248,7 +251,7 @@ func TestResponseForwarder(t *testing.T) {
 	}))
 	defer proxyServer.Close()
 	proxyClient := proxyServer.Client()
-	responseForwarder, err := NewResponseForwarder(proxyClient, proxyServer.URL+"/", backendID, requestID)
+	responseForwarder, err := NewResponseForwarder(proxyClient, proxyServer.URL+"/", backendID, requestID, endUserRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +293,7 @@ func TestResponseForwarderWithProxyHangup(t *testing.T) {
 	}))
 	defer proxyServer.Close()
 	proxyClient := proxyServer.Client()
-	responseForwarder, err := NewResponseForwarder(proxyClient, proxyServer.URL+"/", backendID, requestID)
+	responseForwarder, err := NewResponseForwarder(proxyClient, proxyServer.URL+"/", backendID, requestID, endUserRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,13 +354,77 @@ func TestResponseForwarderWithRetries(t *testing.T) {
 	proxyClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		return errors.New("no redirects")
 	}
-	responseForwarder, err := NewResponseForwarder(proxyClient, proxyServer.URL+"/", "backend", "request")
+	responseForwarder, err := NewResponseForwarder(proxyClient, proxyServer.URL+"/", "backend", "request", endUserRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	backendServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("test backend response"))
+	}))
+	defer backendServer.Close()
+	backendURL, err := url.Parse(backendServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	hostProxy := httputil.NewSingleHostReverseProxy(backendURL)
+	hostProxy.FlushInterval = 100 * time.Millisecond
+	hostProxy.ServeHTTP(responseForwarder, endUserRequest)
+	if err := responseForwarder.Close(); err != nil {
+		t.Errorf("failed to close the response forwarder: %v", err)
+	}
+}
+
+func TestResponseForwarderHTTP2(t *testing.T) {
+	const (
+		backendID      = "backend"
+		requestID      = "request"
+		endUserMessage = "hello"
+		backendMessage = "ok"
+	)
+	expectedResponse := strings.Join([]string{endUserMessage, backendMessage}, "\n")
+	endUserRequest := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(endUserMessage))
+	endUserRequest.Proto = "HTTP/2.0"
+	endUserRequest.ProtoMajor = 2
+	endUserRequest.ProtoMinor = 0
+	proxyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response, err := http.ReadResponse(bufio.NewReader(r.Body), endUserRequest)
+		if err != nil {
+			t.Errorf("Failure reading the proxied response: %v", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if got, want := response.Proto, endUserRequest.Proto; got != want {
+			t.Errorf("Unexpected response proto: got %q, want %q", got, want)
+		}
+		responseBytes, err := ioutil.ReadAll(response.Body)
+		if err != nil {
+			t.Errorf("Failure reading the response body: %v", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if got, want := string(responseBytes), expectedResponse; got != want {
+			t.Errorf("Unexpected backend response; got %q, want %q", got, want)
+		}
+		w.Write([]byte("ok"))
+	}))
+	defer proxyServer.Close()
+	proxyClient := proxyServer.Client()
+	responseForwarder, err := NewResponseForwarder(proxyClient, proxyServer.URL+"/", backendID, requestID, endUserRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	backendServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestBytes, err := ioutil.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("Failure reading the proxied request: %v", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		respMessage := strings.Join([]string{string(requestBytes), backendMessage}, "\n")
+		w.Write([]byte(respMessage))
 	}))
 	defer backendServer.Close()
 	backendURL, err := url.Parse(backendServer.URL)

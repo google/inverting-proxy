@@ -429,7 +429,7 @@ func postResponseWithRetries(client *http.Client, proxyURL, backendID, requestID
 
 // NewResponseForwarder constructs a new ResponseForwarder that forwards to the
 // given proxy for the specified request.
-func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID string) (*ResponseForwarder, error) {
+func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID string, r *http.Request) (*ResponseForwarder, error) {
 	// The contortions below support streaming.
 	//
 	// There are two pipes:
@@ -467,11 +467,19 @@ func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID s
 		close(proxyClientErrChan)
 	}()
 
+	proto := "HTTP/1.1"
+	protoMajor := 1
+	protoMinor := 1
+	if r != nil {
+		proto = r.Proto
+		protoMajor = r.ProtoMajor
+		protoMinor = r.ProtoMinor
+	}
 	return &ResponseForwarder{
 		response: &http.Response{
-			Proto:      "HTTP/1.1",
-			ProtoMajor: 1,
-			ProtoMinor: 1,
+			Proto:      proto,
+			ProtoMajor: protoMajor,
+			ProtoMinor: protoMinor,
 			Header:     make(http.Header),
 			Body:       responseBodyReader,
 		},
