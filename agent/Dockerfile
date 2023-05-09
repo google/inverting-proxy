@@ -30,9 +30,11 @@ RUN wget -O /opt/go1.18.1.linux-amd64.tar.gz \
     tar -C /usr/local -xzf /opt/go1.18.1.linux-amd64.tar.gz && \
     export PATH=${PATH}:/usr/local/go/bin/:/opt/bin/ && \
     export GOPATH=/opt/ && \
+    echo "Building Proxy Agent" && \
     go build -o ${GOPATH}/bin/proxy-forwarding-agent /opt/src/github.com/google/inverting-proxy/agent/agent.go && \
-    rm -rf /opt/go1.18.1.linux-amd64.tar.gz && \
-    rm -rf /usr/local
+    echo "Clean up go files and preserve License" && \
+    rm -rf /opt/go1.18.1.linux-amd64.tar.gz && \    
+    find /usr/local/go/ -mindepth 1 ! -name 'LICENSE' -exec rm -rf {} + || true
 
 ENV DEBUG "false"
 ENV PROXY ""
