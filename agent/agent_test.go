@@ -18,13 +18,18 @@ package main_test
 
 import (
 	"bytes"
+	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/http/httputil"
 	"net/url"
 	"os"
 	"os/exec"
@@ -35,10 +40,12 @@ import (
 	"testing"
 	"time"
 
-	"context"
-
 	"github.com/google/uuid"
 	"golang.org/x/net/publicsuffix"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	hellopb "google.golang.org/grpc/examples/helloworld/helloworld"
 )
 
 const (
@@ -140,6 +147,32 @@ func RunBackend(ctx context.Context, t *testing.T) string {
 		backendServer.Close()
 	}()
 	return backendServer.URL
+}
+
+type helloRPCServer struct {
+	hellopb.UnimplementedGreeterServer
+}
+
+func (h *helloRPCServer) SayHello(ctx context.Context, req *hellopb.HelloRequest) (*hellopb.HelloReply, error) {
+	return &hellopb.HelloReply{
+		Message: req.GetName(),
+	}, nil
+}
+
+func RunGRPCBackend(ctx context.Context, t *testing.T) (string, error) {
+	grpcServer := grpc.NewServer()
+	hellopb.RegisterGreeterServer(grpcServer, &helloRPCServer{})
+	lis, err := net.Listen("tcp", ":0")
+	if err != nil {
+		return "", fmt.Errorf("failure listening on a TCP port: %w", err)
+	}
+	go grpcServer.Serve(lis)
+	go func() {
+		<-ctx.Done()
+		grpcServer.Stop()
+		lis.Close()
+	}()
+	return lis.Addr().String(), nil
 }
 
 func RunFakeMetadataServer(ctx context.Context, t *testing.T) string {
@@ -409,5 +442,80 @@ func TestGracefulShutdown(t *testing.T) {
 			t.Fatal("Timed out waiting for the agent to exit.")
 			return
 		}
+	}
+}
+
+func TestHTTP2Backend(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	backendHomeDir, err := ioutil.TempDir("", "backend-home")
+	if err != nil {
+		t.Fatalf("Failed to set up a temporary home directory for the test: %v", err)
+	}
+	gcloudCfg := filepath.Join(backendHomeDir, ".config", "gcloud")
+	if err := os.MkdirAll(gcloudCfg, os.ModePerm); err != nil {
+		t.Fatalf("Failed to set up a temporary home directory for the test: %v", err)
+	}
+	fakeMetadataURL := RunFakeMetadataServer(ctx, t)
+	backendHost, err := RunGRPCBackend(ctx, t)
+	if err != nil {
+		t.Fatalf("Failure running a gRPC backend: %v", err)
+	}
+	proxyPort, err := RunLocalProxy(ctx, t)
+	proxyURL := &url.URL{
+		Scheme: "http",
+		Host:   fmt.Sprintf("localhost:%d", proxyPort),
+	}
+	t.Logf("Started backend at %s and proxy at %s", backendHost, proxyURL.String())
+
+	// This assumes that "Make build" has been run
+	args := strings.Join(append(
+		[]string{"${GOPATH}/bin/proxy-forwarding-agent"},
+		"--debug=true",
+		"--backend=testBackend",
+		"--proxy", proxyURL.String()+"/",
+		"--disable-ssl-for-test=true",
+		"--force-http2",
+		"--host="+backendHost),
+		" ")
+	agentCmd := exec.CommandContext(ctx, "/bin/bash", "-c", args)
+
+	var out bytes.Buffer
+	agentCmd.Stdout = &out
+	agentCmd.Stderr = &out
+	agentCmd.Env = append(os.Environ(), "PATH=", "HOME="+backendHomeDir, "GCE_METADATA_HOST="+strings.TrimPrefix(fakeMetadataURL, "http://"))
+	if err := agentCmd.Start(); err != nil {
+		t.Fatalf("Failed to start the agent binary: %v", err)
+	}
+	defer func() {
+		cancel()
+		err := agentCmd.Wait()
+		t.Logf("Agent result: %v, stdout/stderr: %q", err, out.String())
+	}()
+
+	// Wrap the in-memory proxy with a test server that supports TLS
+	tlsProxy := httputil.NewSingleHostReverseProxy(proxyURL)
+	tlsProxyServer := httptest.NewUnstartedServer(tlsProxy)
+	tlsProxyServer.EnableHTTP2 = true
+	tlsProxyServer.StartTLS()
+	defer tlsProxyServer.Close()
+	certPool := x509.NewCertPool()
+	certPool.AddCert(tlsProxyServer.Certificate())
+	clientTransportCredentials := credentials.NewTLS(&tls.Config{
+		RootCAs: certPool,
+	})
+	conn, err := grpc.Dial(strings.TrimPrefix(tlsProxyServer.URL, "https://"), grpc.WithTransportCredentials(clientTransportCredentials))
+	if err != nil {
+		t.Fatalf("Failed to dial the gRPC connection: %v", err)
+	}
+	defer conn.Close()
+	helloClient := hellopb.NewGreeterClient(conn)
+	name := "Example Name"
+	resp, err := helloClient.SayHello(ctx, &hellopb.HelloRequest{Name: name})
+	if err != nil {
+		t.Errorf("helloClient.SayHello: %v", err)
+	} else if got, want := resp.Message, name; got != want {
+		t.Errorf("Unexpected response from SayHello: got %q, want %q", got, want)
 	}
 }

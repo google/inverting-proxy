@@ -28,9 +28,11 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httputil"
@@ -39,6 +41,7 @@ import (
 	"time"
 
 	"github.com/golang/groupcache/lru"
+	"golang.org/x/net/http2"
 	"golang.org/x/net/publicsuffix"
 	"golang.org/x/oauth2/google"
 	compute "google.golang.org/api/compute/v1"
@@ -60,6 +63,7 @@ var (
 	proxy                     = flag.String("proxy", "", "URL (including scheme) of the inverting proxy")
 	proxyTimeout              = flag.Duration("proxy-timeout", 60*time.Second, "Client timeout when sending requests to the inverting proxy")
 	host                      = flag.String("host", "localhost:8080", "Hostname (including port) of the backend server")
+	forceHTTP2                = flag.Bool("force-http2", false, "Force connections to the backend host to be performed using HTTP/2")
 	backendID                 = flag.String("backend", "", "Unique ID for this backend.")
 	debug                     = flag.Bool("debug", false, "Whether or not to print debug log messages")
 	disableSSLForTest         = flag.Bool("disable-ssl-for-test", false, "Disable requirements for SSL when running tests locally")
@@ -94,11 +98,19 @@ var (
 	metricHandler *metrics.MetricHandler
 )
 
-func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) (http.Handler, error) {
+func hostProxy(ctx context.Context, host, shimPath string, injectShimCode, forceHTTP2 bool) (http.Handler, error) {
 	hostProxy := httputil.NewSingleHostReverseProxy(&url.URL{
 		Scheme: "http",
 		Host:   host,
 	})
+	if forceHTTP2 {
+		hostProxy.Transport = &http2.Transport{
+			AllowHTTP: true,
+			DialTLSContext: func(ctx context.Context, network string, addr string, cfg *tls.Config) (net.Conn, error) {
+				return net.Dial(network, addr)
+			},
+		}
+	}
 	hostProxy.FlushInterval = 100 * time.Millisecond
 	var h http.Handler = hostProxy
 	h = sessionLRU.SessionHandler(h, metricHandler)
@@ -294,7 +306,7 @@ func runAdapter(ctx context.Context, requestPollingCtx context.Context) error {
 	}
 	client.Timeout = *proxyTimeout
 
-	hostProxy, err := hostProxy(ctx, *host, *shimPath, *shimWebsockets)
+	hostProxy, err := hostProxy(ctx, *host, *shimPath, *shimWebsockets, *forceHTTP2)
 	if err != nil {
 		return err
 	}

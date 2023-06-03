@@ -31,6 +31,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -482,6 +483,7 @@ func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID s
 			ProtoMinor: protoMinor,
 			Header:     make(http.Header),
 			Body:       responseBodyReader,
+			Trailer:    make(http.Header),
 		},
 		wroteHeader:        false,
 		header:             make(http.Header),
@@ -536,6 +538,7 @@ func (rf *ResponseForwarder) WriteHeader(code int) {
 	}
 	rf.response.StatusCode = code
 	rf.response.Status = http.StatusText(rf.response.StatusCode)
+	rf.response.TransferEncoding = []string{"chunked"}
 	// This will write the status and headers immediately and stream the
 	// body using the pipes we've wired.
 	go func() {
@@ -565,6 +568,27 @@ func (rf *ResponseForwarder) WriteHeader(code int) {
 // errors that occured while forwarding the response.
 func (rf *ResponseForwarder) Close() error {
 	rf.notify()
+	for _, k := range rf.Header().Values("Trailer") {
+		if _, ok := hopHeaders[k]; ok {
+			continue
+		}
+		for _, v := range rf.header.Values(k) {
+			rf.response.Trailer.Add(k, v)
+		}
+	}
+	for k, vs := range rf.header {
+		var foundPrefix bool
+		k, foundPrefix = strings.CutPrefix(k, http.TrailerPrefix)
+		if !foundPrefix {
+			continue
+		}
+		if _, ok := hopHeaders[k]; ok {
+			continue
+		}
+		for _, v := range vs {
+			rf.response.Trailer.Add(k, v)
+		}
+	}
 	var errs []error
 	if err := rf.responseBodyWriter.Close(); err != nil {
 		errs = append(errs, err)
