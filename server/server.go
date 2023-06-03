@@ -42,7 +42,8 @@ import (
 )
 
 var (
-	port = flag.Int("port", 0, "Port on which to listen")
+	port  = flag.Int("port", 0, "Port on which to listen")
+	extra = flag.String("extra-header", "", "Extra header to add to proxied requests")
 )
 
 // pendingRequest represents a frontend request
@@ -216,6 +217,12 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			r.Header.Del(name)
 		}
 	}
+	
+	// Add the extra header to the request
+	if *extra != "" {
+		r.Header.Set("X-Custom-Header", *extra)
+	}
+
 	pending := newPendingRequest(r)
 	p.Lock()
 	p.requests[id] = pending
@@ -224,39 +231,46 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Enqueue the request
 	select {
 	case <-r.Context().Done():
-		// The client request was cancelled
-		log.Printf("Timeout waiting to enqueue the request ID for %q", id)
-		return
+		// The client hung up before we could proxy it
+		p.Lock()
+		delete(p.requests, id)
+		p.Unlock()
 	case p.requestIDs <- id:
 	}
-	log.Printf("Request %q enqueued after %s", id, time.Since(pending.startTime))
-	// Pull out and copy the response
-	defer log.Printf("Response for %q received after %s", id, time.Since(pending.startTime))
+
 	select {
 	case <-r.Context().Done():
-		// The client request was cancelled
-		log.Printf("Timeout waiting for the response to %q", id)
-		return
+		// The client hung up before we could proxy it
+		p.Lock()
+		delete(p.requests, id)
+		p.Unlock()
 	case resp := <-pending.respChan:
-		defer resp.Body.Close()
-		// Copy all of the non-hop-by-hop headers to the proxied response
-		for name, vals := range resp.Header {
-			if !isHopByHopHeader(name) {
-				w.Header()[name] = vals
+		log.Printf("Got response for request %q", id)
+		for name, values := range resp.Header {
+			for _, value := range values {
+				w.Header().Add(name, value)
 			}
 		}
 		w.WriteHeader(resp.StatusCode)
 		io.Copy(w, resp.Body)
-		return
 	}
 }
 
 func main() {
 	flag.Parse()
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
+
+	l, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
 	if err != nil {
-		log.Fatalf("Failed to create the TCP listener for port %d: %v", *port, err)
+		log.Fatalf("Failed to listen: %v", err)
 	}
-	log.Printf("Listening on %s", listener.Addr())
-	log.Fatal(http.Serve(listener, newProxy()))
+	log.Printf("Listening on %s", l.Addr().String())
+
+	proxy := newProxy()
+	server := &http.Server{
+		Handler: proxy,
+	}
+	err = server.Serve(l)
+	if err != nil {
+		log.Fatalf("Failed to start server: %v", err)
+	}
 }
