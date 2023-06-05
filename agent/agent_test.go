@@ -463,6 +463,9 @@ func TestHTTP2Backend(t *testing.T) {
 		t.Fatalf("Failure running a gRPC backend: %v", err)
 	}
 	proxyPort, err := RunLocalProxy(ctx, t)
+	if err != nil {
+		t.Fatalf("Failure running the local proxy: %v", err)
+	}
 	proxyURL := &url.URL{
 		Scheme: "http",
 		Host:   fmt.Sprintf("localhost:%d", proxyPort),
