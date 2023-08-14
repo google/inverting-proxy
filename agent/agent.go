@@ -63,6 +63,8 @@ var (
 	proxy                     = flag.String("proxy", "", "URL (including scheme) of the inverting proxy")
 	proxyTimeout              = flag.Duration("proxy-timeout", 60*time.Second, "Client timeout when sending requests to the inverting proxy")
 	host                      = flag.String("host", "localhost:8080", "Hostname (including port) of the backend server")
+	sidecarHost               = flag.String("sidecar-host", "", "Hostname (including port) of the sidecar host server. HTTP requests matching sidecar-url-path will be sent here. Example: localhost:8082")
+	sidecarURLPath            = flag.String("sidecar-url-path", "", "HTTP path that match this pattern will be send to sidecar-host. Do not allow base /.")
 	forceHTTP2                = flag.Bool("force-http2", false, "Force connections to the backend host to be performed using HTTP/2")
 	backendID                 = flag.String("backend", "", "Unique ID for this backend.")
 	debug                     = flag.Bool("debug", false, "Whether or not to print debug log messages")
@@ -99,10 +101,34 @@ var (
 )
 
 func hostProxy(ctx context.Context, host, shimPath string, injectShimCode, forceHTTP2 bool) (http.Handler, error) {
-	hostProxy := httputil.NewSingleHostReverseProxy(&url.URL{
-		Scheme: "http",
-		Host:   host,
-	})
+	hostURL, _ := url.Parse("http://" + host)
+	hostProxy := httputil.NewSingleHostReverseProxy(hostURL)
+
+	// Pass HTTP prefixes to an alternate backend if defined. Do not allow base /.
+	if *sidecarURLPath != "/" && *sidecarURLPath != "" && *sidecarHost != "" {
+		if *debug {
+			log.Printf("Sidecar Host enabled %s|%s", *sidecarURLPath, *sidecarHost)
+		}
+		sidecarURL, err := url.Parse("http://" + *sidecarHost)
+		if err != nil {
+			log.Fatalf("Error parsing sidecar sidecar host URL: %v", err)
+			return nil, err
+		}
+		director := func(req *http.Request) {
+			targetURL := hostURL // backend
+			if *debug {
+				log.Printf("Request URL Path: %s| sidecarURLPath: %s", req.URL.Path, *sidecarURLPath)
+			}
+			if strings.HasPrefix(req.URL.Path, *sidecarURLPath) {
+				targetURL = sidecarURL // HTTP request is passed to an alternate backend.
+			}
+			req.URL.Scheme = targetURL.Scheme
+			req.URL.Host = targetURL.Host
+			req.Host = targetURL.Host
+		}
+		hostProxy = &httputil.ReverseProxy{Director: director}
+	}
+
 	if forceHTTP2 {
 		hostProxy.Transport = &http2.Transport{
 			AllowHTTP: true,
