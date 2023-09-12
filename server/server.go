@@ -42,7 +42,10 @@ import (
 )
 
 var (
-	port = flag.Int("port", 0, "Port on which to listen")
+	port               = flag.Int("port", 0, "Port on which to listen")
+	requestTimeout     = flag.Duration("request-timeout", 0, "Maximum time allowed for a single request; 0 indicates no timeout")
+	listPendingTimeout = flag.Duration("list-pending-timeout", 30*time.Second, "Maximum time to wait to match up a list-pending request with a set of frontend requests. This should be smaller than the proxy agent's --proxy-timeout flag")
+	requestQueueSize   = flag.Int("request-queue-size", 0, "Maximum number of in-flight requests to hold in memory without a proxy agent having downloaded them")
 )
 
 // pendingRequest represents a frontend request
@@ -71,7 +74,7 @@ type proxy struct {
 
 func newProxy() *proxy {
 	return &proxy{
-		requestIDs:    make(chan string),
+		requestIDs:    make(chan string, *requestQueueSize),
 		randGenerator: rand.New(rand.NewSource(time.Now().UnixNano())),
 		requests:      make(map[string]*pendingRequest),
 	}
@@ -141,7 +144,7 @@ func (p *proxy) waitForRequestIDs(ctx context.Context) []string {
 	select {
 	case <-ctx.Done():
 		return nil
-	case <-time.After(30 * time.Second):
+	case <-time.After(*listPendingTimeout):
 		return nil
 	case id := <-p.requestIDs:
 		requestIDs = append(requestIDs, id)
@@ -204,6 +207,12 @@ func isHopByHopHeader(name string) bool {
 }
 
 func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if *requestTimeout > 0 {
+		var cancel func()
+		ctx, cancel = context.WithTimeout(r.Context(), *requestTimeout)
+		defer cancel()
+	}
 	if backendID := r.Header.Get(utils.HeaderBackendID); backendID != "" {
 		p.handleAgentRequest(w, r, backendID)
 		return
@@ -227,6 +236,11 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// The client request was cancelled
 		log.Printf("Timeout waiting to enqueue the request ID for %q", id)
 		return
+	case <-ctx.Done():
+		// We were not able to enqueue the request ID within our required timeout
+		log.Printf("Timeout waiting to enqueue the request ID for %q: %+v", id, r)
+		http.Error(w, http.StatusText(http.StatusGatewayTimeout), http.StatusGatewayTimeout)
+		return
 	case p.requestIDs <- id:
 	}
 	log.Printf("Request %q enqueued after %s", id, time.Since(pending.startTime))
@@ -236,6 +250,10 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case <-r.Context().Done():
 		// The client request was cancelled
 		log.Printf("Timeout waiting for the response to %q", id)
+		return
+	case <-ctx.Done():
+		// The request exceeded our specified request timeout
+		http.Error(w, http.StatusText(http.StatusRequestTimeout), http.StatusRequestTimeout)
 		return
 	case resp := <-pending.respChan:
 		// Copy all of the non-hop-by-hop headers to the proxied response

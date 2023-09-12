@@ -53,7 +53,32 @@ const (
 	sessionCookie = "proxy-sessions-cookie"
 )
 
-func checkRequest(proxyURL, testPath, want string, timeout time.Duration, expectedCookie string) error {
+type infiniteReader struct {
+}
+
+func (d *infiniteReader) Read(b []byte) (n int, err error) {
+	for i := 0; i < len(b); i++ {
+		b[i] = byte(97)
+	}
+	return len(b), nil
+}
+
+func (d *infiniteReader) Close() error {
+	return nil
+}
+
+func testRequest(reqMethod, reqURL string) (*http.Request, error) {
+	req, err := http.NewRequest(reqMethod, reqURL, &infiniteReader{})
+	if err != nil {
+		return nil, err
+	}
+	req.GetBody = func() (io.ReadCloser, error) {
+		return &infiniteReader{}, nil
+	}
+	return req, nil
+}
+
+func checkRequest(proxyURL, testPath string, timeout time.Duration, expectedCookie string) error {
 	jarOptions := cookiejar.Options{
 		PublicSuffixList: publicsuffix.List,
 	}
@@ -70,16 +95,24 @@ func checkRequest(proxyURL, testPath, want string, timeout time.Duration, expect
 	if err != nil {
 		return fmt.Errorf("internal error parsing a test URL: %v", err)
 	}
-	resp, err := client.Get(reqURL)
+	method := http.MethodPost
+	req, err := testRequest(method, reqURL)
 	if err != nil {
-		return fmt.Errorf("failed to issue a frontend GET request: %v", err)
+		return fmt.Errorf("failed to create the frontend request: %v", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to issue a frontend %q request: %v", method, err)
 	}
 	defer resp.Body.Close()
+	if got, want := resp.StatusCode, http.StatusOK; got != want {
+		return fmt.Errorf("unexpected status code for proxied response: got %d, want %d", got, want)
+	}
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("failed to read the response body: %v", err)
 	}
-	if got := string(body); got != want {
+	if got, want := string(body), method+": "+testPath; got != want {
 		return fmt.Errorf("unexpected proxy frontend response; got %q, want %q", got, want)
 	}
 
@@ -92,13 +125,18 @@ func checkRequest(proxyURL, testPath, want string, timeout time.Duration, expect
 	return nil
 }
 
-func RunLocalProxy(ctx context.Context, t *testing.T) (int, error) {
+func RunLocalProxy(ctx context.Context, t *testing.T, requestTimeout time.Duration) (int, error) {
 	// This assumes that "Make build" has been run
-	proxyArgs := strings.Join(append(
+	proxyArgs := append(
 		[]string{"${GOPATH}/bin/inverting-proxy"},
-		"--port=0"),
-		" ")
-	proxyCmd := exec.CommandContext(ctx, "/bin/bash", "-c", proxyArgs)
+		"--port=0")
+	if requestTimeout > 0 {
+		proxyArgs = append(proxyArgs,
+			fmt.Sprintf("--request-timeout=%s", requestTimeout),
+			"--request-queue-size=10",
+			"--list-pending-timeout=10ms")
+	}
+	proxyCmd := exec.CommandContext(ctx, "/bin/bash", "-c", strings.Join(proxyArgs, " "))
 
 	var proxyOut bytes.Buffer
 	proxyCmd.Stdout = &proxyOut
@@ -140,7 +178,7 @@ func RunBackend(ctx context.Context, t *testing.T) string {
 		if got, want := bc.Value, backendCookieVal; got != want {
 			t.Errorf("Unexepected backend cookie value: got %q, want %q", got, want)
 		}
-		w.Write([]byte(r.URL.Path))
+		w.Write([]byte(r.Method + ": " + r.URL.Path))
 	}))
 	go func() {
 		<-ctx.Done()
@@ -228,7 +266,7 @@ func TestWithInMemoryProxyAndBackend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to parse the backend URL: %v", err)
 	}
-	proxyPort, err := RunLocalProxy(ctx, t)
+	proxyPort, err := RunLocalProxy(ctx, t, time.Second)
 	proxyURL := fmt.Sprintf("http://localhost:%d", proxyPort)
 	if err != nil {
 		t.Fatalf("Failed to run the local inverting proxy: %v", err)
@@ -241,7 +279,8 @@ func TestWithInMemoryProxyAndBackend(t *testing.T) {
 		"--debug=true",
 		"--backend=testBackend",
 		"--proxy", proxyURL+"/",
-		"--host=localhost:"+parsedBackendURL.Port()),
+		"--host=localhost:"+parsedBackendURL.Port(),
+		"--proxy-timeout=15ms"),
 		" ")
 	agentCmd := exec.CommandContext(ctx, "/bin/bash", "-c", args)
 
@@ -263,7 +302,7 @@ func TestWithInMemoryProxyAndBackend(t *testing.T) {
 	// We give this initial request a long time to complete, as the agent takes
 	// a long time to start up.
 	testPath := "/some/request/path"
-	if err := checkRequest(proxyURL, testPath, testPath, time.Second, backendCookie); err != nil {
+	if err := checkRequest(proxyURL, testPath, time.Second, backendCookie); err != nil {
 		t.Fatalf("Failed to send the initial request: %v", err)
 	}
 
@@ -274,7 +313,7 @@ func TestWithInMemoryProxyAndBackend(t *testing.T) {
 		//
 		// The specific value was chosen by running the test in a loop 100 times and
 		// incrementing the value until all 100 runs passed.
-		if err := checkRequest(proxyURL, testPath, testPath, 100*time.Millisecond, backendCookie); err != nil {
+		if err := checkRequest(proxyURL, testPath, 100*time.Millisecond, backendCookie); err != nil {
 			t.Fatalf("Failed to send request %d: %v", i, err)
 		}
 	}
@@ -299,7 +338,7 @@ func TestWithInMemoryProxyAndBackendWithSessions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to parse the backend URL: %v", err)
 	}
-	proxyPort, err := RunLocalProxy(ctx, t)
+	proxyPort, err := RunLocalProxy(ctx, t, time.Second)
 	proxyURL := fmt.Sprintf("http://localhost:%d", proxyPort)
 	if err != nil {
 		t.Fatalf("Failed to run the local inverting proxy: %v", err)
@@ -316,7 +355,8 @@ func TestWithInMemoryProxyAndBackendWithSessions(t *testing.T) {
 		"--disable-ssl-for-test=true",
 		"--inject-banner=\\<div\\>FOO\\</div\\>",
 		"--favicon-url=www.favicon.com/test.png",
-		"--host=localhost:"+parsedBackendURL.Port()),
+		"--host=localhost:"+parsedBackendURL.Port(),
+		"--proxy-timeout=15ms"),
 		" ")
 	agentCmd := exec.CommandContext(ctx, "/bin/bash", "-c", args)
 
@@ -338,7 +378,7 @@ func TestWithInMemoryProxyAndBackendWithSessions(t *testing.T) {
 	// We give this initial request a long time to complete, as the agent takes
 	// a long time to start up.
 	testPath := "/some/request/path"
-	if err := checkRequest(proxyURL, testPath, testPath, time.Second, sessionCookie); err != nil {
+	if err := checkRequest(proxyURL, testPath, time.Second, sessionCookie); err != nil {
 		t.Fatalf("Failed to send the initial request: %v", err)
 	}
 
@@ -349,7 +389,7 @@ func TestWithInMemoryProxyAndBackendWithSessions(t *testing.T) {
 		//
 		// The specific value was chosen by running the test in a loop 100 times and
 		// incrementing the value until all 100 runs passed.
-		if err := checkRequest(proxyURL, testPath, testPath, 100*time.Millisecond, sessionCookie); err != nil {
+		if err := checkRequest(proxyURL, testPath, 100*time.Millisecond, sessionCookie); err != nil {
 			t.Fatalf("Failed to send request %d: %v", i, err)
 		}
 	}
@@ -374,7 +414,7 @@ func TestGracefulShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to parse the backend URL: %v", err)
 	}
-	proxyPort, err := RunLocalProxy(ctx, t)
+	proxyPort, err := RunLocalProxy(ctx, t, time.Second)
 	proxyURL := fmt.Sprintf("http://localhost:%d", proxyPort)
 	if err != nil {
 		t.Fatalf("Failed to run the local inverting proxy: %v", err)
@@ -388,7 +428,8 @@ func TestGracefulShutdown(t *testing.T) {
 		"--graceful-shutdown-timeout=1s",
 		"--backend=testBackend",
 		"--proxy", proxyURL+"/",
-		"--host=localhost:"+parsedBackendURL.Port()),
+		"--host=localhost:"+parsedBackendURL.Port(),
+		"--proxy-timeout=15ms"),
 		" ")
 	agentCmd := exec.CommandContext(ctx, "/bin/bash", "-c", args)
 
@@ -410,7 +451,7 @@ func TestGracefulShutdown(t *testing.T) {
 	// We give this initial request a long time to complete, as the agent takes
 	// a long time to start up.
 	testPath := "/some/request/path"
-	if err := checkRequest(proxyURL, testPath, testPath, time.Second, backendCookie); err != nil {
+	if err := checkRequest(proxyURL, testPath, time.Second, backendCookie); err != nil {
 		t.Fatalf("Failed to send the initial request: %v", err)
 	}
 
@@ -421,7 +462,7 @@ func TestGracefulShutdown(t *testing.T) {
 		//
 		// The specific value was chosen by running the test in a loop 100 times and
 		// incrementing the value until all 100 runs passed.
-		if err := checkRequest(proxyURL, testPath, testPath, 100*time.Millisecond, backendCookie); err != nil {
+		if err := checkRequest(proxyURL, testPath, 100*time.Millisecond, backendCookie); err != nil {
 			t.Fatalf("Failed to send request %d: %v", i, err)
 		}
 	}
@@ -462,7 +503,7 @@ func TestHTTP2Backend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failure running a gRPC backend: %v", err)
 	}
-	proxyPort, err := RunLocalProxy(ctx, t)
+	proxyPort, err := RunLocalProxy(ctx, t, 0)
 	if err != nil {
 		t.Fatalf("Failure running the local proxy: %v", err)
 	}

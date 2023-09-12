@@ -84,6 +84,36 @@ func TestParseRequests(t *testing.T) {
 	}
 }
 
+// inifiniteReadCloser is used to test that we can parse an HTTP request from a stream
+// without waiting for the stream to terminate.
+//
+// The wrapped ReadCloser should contain the serialized contents of an HTTP request.
+type infiniteReadCloser struct {
+	delay   time.Duration
+	wrapped io.ReadCloser
+}
+
+func (d *infiniteReadCloser) Read(b []byte) (n int, err error) {
+	// First we read from the wrapped reader; once it returns an EOF we
+	// fall back to outputting an infinite stream of gibberish.
+	count, err := d.wrapped.Read(b)
+	if err != io.EOF {
+		return count, err
+	}
+	if count > 0 {
+		return count, nil
+	}
+	for i := 0; i < len(b); i++ {
+		b[i] = byte(32)
+	}
+	return len(b), nil
+}
+
+func (d *infiniteReadCloser) Close() error {
+	time.Sleep(d.delay)
+	return d.wrapped.Close()
+}
+
 func TestParseRequestFromProxyResponse(t *testing.T) {
 	mockFailedProxyResponse := &http.Response{
 		StatusCode:    http.StatusInternalServerError,
@@ -107,12 +137,16 @@ func TestParseRequestFromProxyResponse(t *testing.T) {
 		mockForwardedRequest.Write(requestWriter)
 		requestWriter.Close()
 	}()
+	infiniteRequestReader := &infiniteReadCloser{
+		delay:   time.Minute,
+		wrapped: requestReader,
+	}
 	mockResponseHeader := make(http.Header)
 	mockProxyResponse := &http.Response{
 		StatusCode:    http.StatusOK,
 		ContentLength: 0,
 		Header:        mockResponseHeader,
-		Body:          requestReader,
+		Body:          infiniteRequestReader,
 	}
 	mockResponseHeader.Add(HeaderUserID, "someone")
 	mockStartTime := time.Now()
