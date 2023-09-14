@@ -39,6 +39,8 @@ import (
 	"time"
 
 	"github.com/google/inverting-proxy/agent/utils"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 )
 
 var (
@@ -286,5 +288,6 @@ func main() {
 		log.Fatalf("Failed to create the TCP listener for port %d: %v", *port, err)
 	}
 	log.Printf("Listening on %s", listener.Addr())
-	log.Fatal(http.Serve(listener, newProxy()))
+	h := h2c.NewHandler(newProxy(), &http2.Server{})
+	log.Fatal(http.Serve(listener, h))
 }
