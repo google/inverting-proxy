@@ -22,11 +22,11 @@ buildrunwebsockets: buildagent buildserver
 	go mod tidy
 
 buildagent: vet
-	go build -o ${GOPATH}/bin/proxy-forwarding-agent ./agent/agent.go
+	CGO_ENABLED=0 go build -o ${GOPATH}/bin/proxy-forwarding-agent ./agent/agent.go
 	go mod tidy
 
 buildserver: vet
-	go build -o ${GOPATH}/bin/inverting-proxy ./server/server.go
+	CGO_ENABLED=0 go build -o ${GOPATH}/bin/inverting-proxy ./server/server.go
 	go mod tidy
 
 vet:	deps
