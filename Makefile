@@ -2,13 +2,18 @@ build:	test
 	go build ./app/...
 	go mod tidy
 
-test:	buildrunlocal buildrunwebsockets
+test:	buildrunlocal buildrunwebsockets buildtcpbridge
 	go test ./agent/banner/...
 	go test ./agent/metrics/...
 	go test ./agent/sessions/...
 	go test ./agent/utils/...
 	go test ./agent/websockets/...
 	go test -count 1 ./agent/agent_test.go
+	go mod tidy
+
+buildtcpbridge: vet
+	go build -o ${GOPATH}/bin/tcp-over-ws-bridge-frontend ./utils/tcpbridge/frontend.go
+	go build -o ${GOPATH}/bin/tcp-over-ws-bridge-backend ./utils/tcpbridge/backend.go
 	go mod tidy
 
 buildrunlocal: buildagent buildserver
