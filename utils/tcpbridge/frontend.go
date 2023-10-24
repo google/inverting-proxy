@@ -24,7 +24,7 @@ limitations under the License.
 //
 // And to use, run:
 //
-//    $ $(GOPATH)/bin/tcp-over-ws-bridge-frontend -port <PORT> -backend <BACKEND_URL>
+//    $ $(GOPATH)/bin/tcp-over-ws-bridge-frontend -frontend-port <PORT> -backend <BACKEND_URL>
 //
 // In order for this bridging to work, the backend must be running the `backend` binary
 // provided in this same package (or another server implementing the same protocol).
@@ -46,8 +46,8 @@ import (
 )
 
 var (
-	port    = flag.Int("port", 8080, "the port to serve on")
-	backend = flag.String("backend", "", "URL of the backend server for the TCP-over-WS bridge")
+	frontendPort = flag.Int("frontend-port", 8080, "the port to serve on")
+	backend      = flag.String("backend", "", "URL of the backend server for the TCP-over-WS bridge")
 )
 
 func main() {
@@ -58,7 +58,7 @@ func main() {
 	}
 	backendURL.Path = path.Join(backendURL.Path, connection.StreamingPath)
 	log.Printf("Backend URL: %+v", backendURL)
-	l, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
+	l, err := net.Listen("tcp", fmt.Sprintf(":%d", *frontendPort))
 	if err != nil {
 		log.Fatal(err)
 	}

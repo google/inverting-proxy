@@ -24,7 +24,7 @@ limitations under the License.
 //
 // And to use, run:
 //
-//    $ $(GOPATH)/bin/tcp-over-ws-bridge-backend -port <PORT> -backend-port <BACKEND_PORT>
+//    $ $(GOPATH)/bin/tcp-over-ws-bridge-backend -frontend-port <PORT> -backend-port <BACKEND_PORT>
 //
 // The backend expects bridged requests to be sent over websocket connections to
 // a fixed path.
@@ -54,9 +54,9 @@ import (
 )
 
 var (
-	port        = flag.Int("port", 8080, "the port to serve on")
-	backendPort = flag.Int("backend-port", 8081, "the TCP port to which to forward connections")
-	forceHTTP2  = flag.Bool("force-http2", false, "if true, will force HTTP requests that are passed through to the backend unchanged to be sent over HTTP/2")
+	frontendPort = flag.Int("frontend-port", 8080, "the port to serve on")
+	backendPort  = flag.Int("backend-port", 8081, "the TCP port to which to forward connections")
+	forceHTTP2   = flag.Bool("force-http2", false, "if true, will force HTTP requests that are passed through to the backend unchanged to be sent over HTTP/2")
 )
 
 func main() {
@@ -116,5 +116,5 @@ func main() {
 		wg.Wait()
 	})
 	h2h := h2c.NewHandler(handler, &http2.Server{})
-	panic(http.ListenAndServe(fmt.Sprintf(":%d", *port), h2h))
+	panic(http.ListenAndServe(fmt.Sprintf(":%d", *frontendPort), h2h))
 }
