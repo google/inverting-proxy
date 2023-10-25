@@ -39,16 +39,12 @@ import (
 	"crypto/tls"
 	"flag"
 	"fmt"
-	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"sync"
 
 	"github.com/google/inverting-proxy/utils/tcpbridge/connection"
-	"github.com/gorilla/websocket"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 )
@@ -76,45 +72,7 @@ func main() {
 		}
 	}
 
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !websocket.IsWebSocketUpgrade(r) || r.URL.Path != connection.StreamingPath {
-			passthroughBackend.ServeHTTP(w, r)
-			return
-		}
-		ctx, cancel := context.WithCancel(r.Context())
-		defer cancel()
-		upgrader := websocket.Upgrader{
-			ReadBufferSize:  1024,
-			WriteBufferSize: 1024,
-		}
-		r = r.WithContext(ctx)
-		wsConn, err := upgrader.Upgrade(w, r, r.Header)
-		if err != nil {
-			log.Printf("Failure upgrading a websocket connection: %v", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		defer wsConn.Close()
-		conn := &connection.WebsocketNetConn{Conn: wsConn}
-
-		backendConn, err := net.Dial("tcp", backendHost)
-		if err != nil {
-			log.Printf("Failure establishing the backend connection: %v", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		var wg sync.WaitGroup
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			io.Copy(backendConn, conn)
-		}()
-		go func() {
-			defer wg.Done()
-			io.Copy(conn, backendConn)
-		}()
-		wg.Wait()
-	})
+	handler := connection.Handler(*backendPort, passthroughBackend)
 	h2h := h2c.NewHandler(handler, &http2.Server{})
 	panic(http.ListenAndServe(fmt.Sprintf(":%d", *frontendPort), h2h))
 }

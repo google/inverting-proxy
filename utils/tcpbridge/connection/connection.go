@@ -21,9 +21,12 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -91,4 +94,50 @@ func DialWebsocket(ctx context.Context, backendURL *url.URL, h http.Header) (net
 		return nil, fmt.Errorf("unable to dial websocket: %w", err)
 	}
 	return &WebsocketNetConn{Conn: conn}, nil
+}
+
+// Handler returns an HTTP handler that forwards bridged TCP connections to the given port.
+//
+// The passthroughHandler is used to forward any requests that are not part of the TCP-Over-WS bridge.
+func Handler(backendPort int, passthroughHandler http.Handler) http.Handler {
+	backendHost := fmt.Sprintf("localhost:%d", backendPort)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !websocket.IsWebSocketUpgrade(r) || r.URL.Path != StreamingPath {
+			passthroughHandler.ServeHTTP(w, r)
+			return
+		}
+		ctx, cancel := context.WithCancel(r.Context())
+		defer cancel()
+		upgrader := websocket.Upgrader{
+			ReadBufferSize:  1024,
+			WriteBufferSize: 1024,
+		}
+		r = r.WithContext(ctx)
+		wsConn, err := upgrader.Upgrade(w, r, r.Header)
+		if err != nil {
+			log.Printf("Failure upgrading a websocket connection: %v", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer wsConn.Close()
+		conn := &WebsocketNetConn{Conn: wsConn}
+
+		backendConn, err := net.Dial("tcp", backendHost)
+		if err != nil {
+			log.Printf("Failure establishing the backend connection: %v", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			io.Copy(backendConn, conn)
+		}()
+		go func() {
+			defer wg.Done()
+			io.Copy(conn, backendConn)
+		}()
+		wg.Wait()
+	})
 }
