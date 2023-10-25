@@ -17,7 +17,7 @@ require (
 	google.golang.org/appengine/v2 v2.0.2
 	google.golang.org/genproto v0.0.0-20230526161137-0005af68ea54
 	google.golang.org/genproto/googleapis/api v0.0.0-20230525234035-dd9d682886f9
-	google.golang.org/grpc v1.54.0
+	google.golang.org/grpc v1.56.3
 	google.golang.org/grpc/examples v0.0.0-20230602173802-c9d3ea567325
 )
 
