@@ -12,8 +12,8 @@ test:	buildrunlocal buildrunwebsockets buildtcpbridge
 	go mod tidy
 
 buildtcpbridge: vet
-	go build -o ${GOPATH}/bin/tcp-over-ws-bridge-frontend ./utils/tcpbridge/frontend.go
-	go build -o ${GOPATH}/bin/tcp-over-ws-bridge-backend ./utils/tcpbridge/backend.go
+	go build -o ${GOPATH}/bin/tcp-over-ws-bridge-frontend ./utils/tcpbridge/frontend/frontend.go
+	go build -o ${GOPATH}/bin/tcp-over-ws-bridge-backend ./utils/tcpbridge/backend/backend.go
 	go mod tidy
 
 buildrunlocal: buildagent buildserver
