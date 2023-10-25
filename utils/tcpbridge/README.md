@@ -37,11 +37,11 @@ go install github.com/google/inverting-proxy/utils/tcpbridge/...@latest
 The left-most and right-most arrows represent arbitrary TCP connections, whereas
 the numbered arrows in the rest of the diagram represent the following:
 
-(1) An HTTP GET request from the agent to list pending requests
-(2) A websocket upgrade request from the frontend of the TCP-Over-Websocket bridge.
-(3) An HTTP response from the proxy to the agent.
-(4) A websocket upgrade request from the proxy agent to the backend of the bridge.
-(5) Websocket messages sent in both directions between the bridge backend and the agent.
-(6) HTTP GET and POST messages sent between the agent and proxy containing the contents
-    of websocket messages sent in each direction.
-(7) Websockent messages sent in both directions between the proxy and bridge frontend.
+1. An HTTP GET request from the agent to list pending requests
+2. A websocket upgrade request from the frontend of the TCP-Over-Websocket bridge.
+3. An HTTP response from the proxy to the agent.
+4. A websocket upgrade request from the proxy agent to the backend of the bridge.
+5. Websocket messages sent in both directions between the bridge backend and the agent.
+6. HTTP GET and POST messages sent between the agent and proxy containing the contents
+   of websocket messages sent in each direction.
+7. Websockent messages sent in both directions between the proxy and bridge frontend.
