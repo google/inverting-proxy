@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Command backend implements the backend of a bridge that tunnels TCP over websocket.
+// Command tcp-bridge-backend implements the backend of a bridge that tunnels TCP over websocket.
 //
 // This allows arbitrary TCP protocols to be forwarded over the inverting proxy.
 //
@@ -24,7 +24,7 @@ limitations under the License.
 //
 // And to use, run:
 //
-//    $ $(GOPATH)/bin/tcp-over-ws-bridge-backend -frontend-port <PORT> -backend-port <BACKEND_PORT>
+//    $ $(GOPATH)/bin/tcp-bridge-backend -frontend-port <PORT> -backend-port <BACKEND_PORT>
 //
 // The backend expects bridged requests to be sent over websocket connections to
 // a fixed path.
