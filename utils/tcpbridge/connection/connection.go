@@ -120,7 +120,7 @@ func Handler(backendPort int, passthroughHandler http.Handler) http.Handler {
 			return
 		}
 		defer wsConn.Close()
-		conn := &WebsocketNetConn{Conn: wsConn}
+		frontendConn := &WebsocketNetConn{Conn: wsConn}
 
 		backendConn, err := net.Dial("tcp", backendHost)
 		if err != nil {
@@ -132,11 +132,11 @@ func Handler(backendPort int, passthroughHandler http.Handler) http.Handler {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			io.Copy(backendConn, conn)
+			io.Copy(backendConn, frontendConn)
 		}()
 		go func() {
 			defer wg.Done()
-			io.Copy(conn, backendConn)
+			io.Copy(frontendConn, backendConn)
 		}()
 		wg.Wait()
 	})
