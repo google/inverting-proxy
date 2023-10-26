@@ -428,7 +428,8 @@ func TestGracefulShutdown(t *testing.T) {
 
 	agentCmd.Process.Signal(syscall.SIGINT)
 	waitCh := make(chan struct{})
-	waitCtx, _ := context.WithTimeout(ctx, 2*time.Second)
+	waitCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
 	go func() {
 		agentCmd.Wait()
 		close(waitCh)
