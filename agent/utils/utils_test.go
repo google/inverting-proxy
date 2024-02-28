@@ -24,11 +24,12 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
-	"net/http/httputil"
-	"net/url"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 )
 
 func TestParseRequests(t *testing.T) {
@@ -219,6 +220,196 @@ func TestBufferedReadSeeker(t *testing.T) {
 	}
 }
 
+func TestStreamingResponseWriter(t *testing.T) {
+	testCases := []struct {
+		Description      string
+		Request          *http.Request
+		Handler          http.Handler
+		WantResponse     *http.Response
+		WantResponseBody string
+	}{
+		{
+			Description: "Empty response",
+			Request:     &http.Request{},
+			Handler:     http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}),
+			WantResponse: &http.Response{
+				Status:     http.StatusText(http.StatusOK),
+				StatusCode: http.StatusOK,
+				Header:     http.Header{},
+			},
+			WantResponseBody: "",
+		},
+		{
+			Description: "HTTP/1.1 Request",
+			Request: &http.Request{
+				ProtoMajor: 1,
+				ProtoMinor: 1,
+				Proto:      "HTTP/1.1",
+			},
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}),
+			WantResponse: &http.Response{
+				Proto:      "HTTP/1.1",
+				ProtoMajor: 1,
+				ProtoMinor: 1,
+				Status:     http.StatusText(http.StatusOK),
+				StatusCode: http.StatusOK,
+				Header:     http.Header{},
+			},
+			WantResponseBody: "",
+		},
+		{
+			Description: "HTTP/2 Request",
+			Request: &http.Request{
+				ProtoMajor: 2,
+				Proto:      "HTTP/2",
+			},
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}),
+			WantResponse: &http.Response{
+				Proto:      "HTTP/2",
+				ProtoMajor: 2,
+				Status:     http.StatusText(http.StatusOK),
+				StatusCode: http.StatusOK,
+				Header:     http.Header{},
+			},
+			WantResponseBody: "",
+		},
+		{
+			Description: "Declared trailer",
+			Request:     &http.Request{},
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Add("Trailer", "Foo")
+				w.Write([]byte("OK"))
+				w.Header().Add("Foo", "Bar")
+			}),
+			WantResponse: &http.Response{
+				Status:     http.StatusText(http.StatusOK),
+				StatusCode: http.StatusOK,
+				Header:     http.Header{},
+				Trailer: http.Header{
+					"Foo": []string{"Bar"},
+				},
+			},
+			WantResponseBody: "OK",
+		},
+		{
+			Description: "Undeclared trailer",
+			Request:     &http.Request{},
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Write([]byte("OK"))
+				w.Header().Add("Trailer:Foo", "Bar")
+			}),
+			WantResponse: &http.Response{
+				Status:     http.StatusText(http.StatusOK),
+				StatusCode: http.StatusOK,
+				Header:     http.Header{},
+				Trailer: http.Header{
+					"Foo": []string{"Bar"},
+				},
+			},
+			WantResponseBody: "OK",
+		},
+		{
+			Description: "Filter hop headers",
+			Request:     &http.Request{},
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Add("A", "B")
+				w.Header().Add("C", "D")
+				w.Header().Add("Connection", "FooBar")
+				w.Header().Add("Trailer", "Foo")
+				w.Write([]byte("OK"))
+				w.Header().Add("Foo", "Bar")
+			}),
+			WantResponse: &http.Response{
+				Status:     http.StatusText(http.StatusOK),
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"A": []string{"B"},
+					"C": []string{"D"},
+				},
+				Trailer: http.Header{
+					"Foo": []string{"Bar"},
+				},
+			},
+			WantResponseBody: "OK",
+		},
+		{
+			Description: "Filter hop trailers",
+			Request:     &http.Request{},
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Add("Trailer", "Foo")
+				w.Header().Add("Trailer", "Connection")
+				w.Write([]byte("OK"))
+				w.Header().Add("Foo", "Bar")
+				w.Header().Add("Connection", "FooBar")
+				w.Header().Add("Trailer:Baz", "Bat")
+				w.Header().Add("Trailer:Upgrade", "BarFoo")
+			}),
+			WantResponse: &http.Response{
+				Status:     http.StatusText(http.StatusOK),
+				StatusCode: http.StatusOK,
+				Header:     http.Header{},
+				Trailer: http.Header{
+					"Foo": []string{"Bar"},
+					"Baz": []string{"Bat"},
+				},
+			},
+			WantResponseBody: "OK",
+		},
+		{
+			Description: "Error response",
+			Request:     &http.Request{},
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Add("Trailer", "Foo")
+				w.Header().Add("Trailer", "Connection")
+				http.Error(w, "test error", http.StatusInternalServerError)
+				w.Header().Add("Foo", "Bar")
+				w.Header().Add("Connection", "FooBar")
+				w.Header().Add("Trailer:Baz", "Bat")
+				w.Header().Add("Trailer:Upgrade", "BarFoo")
+			}),
+			WantResponse: &http.Response{
+				Status:     http.StatusText(http.StatusInternalServerError),
+				StatusCode: http.StatusInternalServerError,
+				Header: http.Header{
+					"Content-Type":           {"text/plain; charset=utf-8"},
+					"X-Content-Type-Options": {"nosniff"},
+				},
+				Trailer: http.Header{
+					"Foo": []string{"Bar"},
+					"Baz": []string{"Bat"},
+				},
+			},
+			WantResponseBody: "test error\n",
+		},
+	}
+	for _, testCase := range testCases {
+		respChan := make(chan *http.Response, 1)
+		rw := NewStreamingResponseWriter(respChan, testCase.Request)
+		go func() {
+			testCase.Handler.ServeHTTP(rw, testCase.Request)
+			rw.Close()
+		}()
+		resp := <-respChan
+		defer resp.Body.Close()
+		if diff := cmp.Diff(resp, testCase.WantResponse, cmpopts.IgnoreFields(http.Response{}, "Body", "Trailer")); len(diff) > 0 {
+			t.Errorf("Unexpected diff in response for %q: %s", testCase.Description, diff)
+		}
+		gotBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Errorf("Failure reading the response body for %q: %+v", testCase.Description, err)
+		} else if got, want := string(gotBody), testCase.WantResponseBody; got != want {
+			t.Errorf("Unexpected response body for %q: got %q, want %q", testCase.Description, got, want)
+		}
+		if len(testCase.WantResponse.Trailer) > 0 {
+			for k, v := range testCase.WantResponse.Trailer {
+				if got, want := resp.Trailer.Get(k), v[0]; got != want {
+					t.Errorf("Unexpected trailer for %q/%q: got %q, want %q", testCase.Description, k, got, want)
+				}
+			}
+		}
+	}
+}
+
 func TestResponseForwarder(t *testing.T) {
 	const (
 		backendID      = "backend"
@@ -251,12 +442,12 @@ func TestResponseForwarder(t *testing.T) {
 	}))
 	defer proxyServer.Close()
 	proxyClient := proxyServer.Client()
-	responseForwarder, err := NewResponseForwarder(proxyClient, proxyServer.URL+"/", backendID, requestID, endUserRequest)
+	responseForwarder, err := NewResponseForwarder(proxyClient, proxyServer.URL+"/", backendID, requestID, endUserRequest, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	backendServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	backendHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestBytes, err := ioutil.ReadAll(r.Body)
 		if err != nil {
 			t.Errorf("Failure reading the proxied request: %v", err)
@@ -265,16 +456,8 @@ func TestResponseForwarder(t *testing.T) {
 		}
 		respMessage := strings.Join([]string{string(requestBytes), backendMessage}, "\n")
 		w.Write([]byte(respMessage))
-	}))
-	defer backendServer.Close()
-	backendURL, err := url.Parse(backendServer.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	hostProxy := httputil.NewSingleHostReverseProxy(backendURL)
-	hostProxy.FlushInterval = 100 * time.Millisecond
-	hostProxy.ServeHTTP(responseForwarder, endUserRequest)
+	})
+	backendHandler.ServeHTTP(responseForwarder, endUserRequest)
 	if err := responseForwarder.Close(); err != nil {
 		t.Errorf("failed to close the response forwarder: %v", err)
 	}
@@ -293,25 +476,17 @@ func TestResponseForwarderWithProxyHangup(t *testing.T) {
 	}))
 	defer proxyServer.Close()
 	proxyClient := proxyServer.Client()
-	responseForwarder, err := NewResponseForwarder(proxyClient, proxyServer.URL+"/", backendID, requestID, endUserRequest)
+	responseForwarder, err := NewResponseForwarder(proxyClient, proxyServer.URL+"/", backendID, requestID, endUserRequest, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	backendServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	backendHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Kill the proxy server, forcing the response forwarding to fail
 		proxyServer.Close()
 		w.Write([]byte("ok"))
-	}))
-	defer backendServer.Close()
-	backendURL, err := url.Parse(backendServer.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	hostProxy := httputil.NewSingleHostReverseProxy(backendURL)
-	hostProxy.FlushInterval = 100 * time.Millisecond
-	hostProxy.ServeHTTP(responseForwarder, endUserRequest)
+	})
+	backendHandler.ServeHTTP(responseForwarder, endUserRequest)
 	if err := responseForwarder.Close(); err == nil {
 		t.Errorf("missing expected error forwarding to a closed proxy")
 	}
@@ -354,23 +529,15 @@ func TestResponseForwarderWithRetries(t *testing.T) {
 	proxyClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		return errors.New("no redirects")
 	}
-	responseForwarder, err := NewResponseForwarder(proxyClient, proxyServer.URL+"/", "backend", "request", endUserRequest)
+	responseForwarder, err := NewResponseForwarder(proxyClient, proxyServer.URL+"/", "backend", "request", endUserRequest, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	backendServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	backendHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("test backend response"))
-	}))
-	defer backendServer.Close()
-	backendURL, err := url.Parse(backendServer.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	hostProxy := httputil.NewSingleHostReverseProxy(backendURL)
-	hostProxy.FlushInterval = 100 * time.Millisecond
-	hostProxy.ServeHTTP(responseForwarder, endUserRequest)
+	})
+	backendHandler.ServeHTTP(responseForwarder, endUserRequest)
 	if err := responseForwarder.Close(); err != nil {
 		t.Errorf("failed to close the response forwarder: %v", err)
 	}
@@ -411,12 +578,12 @@ func TestResponseForwarderHTTP2(t *testing.T) {
 	}))
 	defer proxyServer.Close()
 	proxyClient := proxyServer.Client()
-	responseForwarder, err := NewResponseForwarder(proxyClient, proxyServer.URL+"/", backendID, requestID, endUserRequest)
+	responseForwarder, err := NewResponseForwarder(proxyClient, proxyServer.URL+"/", backendID, requestID, endUserRequest, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	backendServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	backendHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestBytes, err := ioutil.ReadAll(r.Body)
 		if err != nil {
 			t.Errorf("Failure reading the proxied request: %v", err)
@@ -425,16 +592,8 @@ func TestResponseForwarderHTTP2(t *testing.T) {
 		}
 		respMessage := strings.Join([]string{string(requestBytes), backendMessage}, "\n")
 		w.Write([]byte(respMessage))
-	}))
-	defer backendServer.Close()
-	backendURL, err := url.Parse(backendServer.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	hostProxy := httputil.NewSingleHostReverseProxy(backendURL)
-	hostProxy.FlushInterval = 100 * time.Millisecond
-	hostProxy.ServeHTTP(responseForwarder, endUserRequest)
+	})
+	backendHandler.ServeHTTP(responseForwarder, endUserRequest)
 	if err := responseForwarder.Close(); err != nil {
 		t.Errorf("failed to close the response forwarder: %v", err)
 	}
