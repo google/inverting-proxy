@@ -18,7 +18,7 @@ RUN apt-get update && apt-get upgrade -y && \
     apt-get install -y -qq --no-install-recommends \
       ca-certificates \
       git \
-      wget && \
+      curl && \
     mkdir -p /opt/bin && \
     mkdir -p /opt/src/github.com/google/inverting-proxy
 
@@ -26,7 +26,7 @@ ADD ./ /opt/src/github.com/google/inverting-proxy
 WORKDIR /opt/src/github.com/google/inverting-proxy
 
 
-RUN wget -O /opt/go1.21.7.linux-amd64.tar.gz \
+RUN curl -o /opt/go1.21.7.linux-amd64.tar.gz \
       https://storage.googleapis.com/golang/go1.21.7.linux-amd64.tar.gz && \
     tar -C /usr/local -xzf /opt/go1.21.7.linux-amd64.tar.gz && \
     export PATH=${PATH}:/usr/local/go/bin/:/opt/bin/ && \
