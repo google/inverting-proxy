@@ -449,7 +449,7 @@ func (w *streamingResponseWriter) WriteHeader(status int) {
 	}
 	w.wroteHeader = true
 
-	// Initialize the response trailers
+	// Initialize the response trailers.
 	w.trailer = make(http.Header)
 	for _, k := range w.Header().Values("Trailer") {
 		// Initialize trailers with empty slices for any pre-declared values.
@@ -459,7 +459,7 @@ func (w *streamingResponseWriter) WriteHeader(status int) {
 		w.trailer[k] = []string{}
 	}
 
-	// Filter out hop-by-hop headers
+	// Filter out hop-by-hop headers.
 	header := make(http.Header)
 	for k, v := range w.Header() {
 		if _, ok := hopHeaders[k]; ok {
