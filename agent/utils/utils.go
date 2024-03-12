@@ -456,16 +456,25 @@ func (w *streamingResponseWriter) WriteHeader(status int) {
 		//
 		// This is necessary for the httputil.ReverseProxy type to forward them correctly.
 		// See [here](https://github.com/golang/go/blob/5e3c4016a436c357a57a6f7870913c6911c6904e/src/net/http/httputil/reverseproxy.go#L509)
-		w.trailer[k] = []string{}
+		if _, ok := hopHeaders[k]; ok {
+			continue
+		}
+		// We manually call `CanonicalHeaderKey` to preserve the invariant that
+		// all keys in a `Header` instance must be in their canonical format.
+		w.trailer[http.CanonicalHeaderKey(k)] = []string{}
 	}
 
 	// Filter out hop-by-hop headers.
 	header := make(http.Header)
-	for k, v := range w.Header() {
+	for k, vs := range w.Header() {
 		if _, ok := hopHeaders[k]; ok {
 			continue
 		}
-		header[k] = v
+		// Iterate through the values to ensure that subsequent changes to the
+		// headers map does not affect the streamed response.
+		for _, v := range vs {
+			header.Add(k, v)
+		}
 	}
 	w.header = header
 
@@ -503,6 +512,9 @@ func (w *streamingResponseWriter) Close() error {
 	}
 	for k, _ := range w.trailer {
 		for _, v := range w.Header().Values(k) {
+			// The `Values` method does not return a copy, so we manually
+			// add each value one at a time to ensure that subsequent changes
+			// to the header do not affect the trailers map.
 			w.trailer.Add(k, v)
 		}
 	}
@@ -567,16 +579,22 @@ func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID s
 	go func() {
 		defer proxyWriter.Close()
 		defer close(writeErrChan)
-		resp := <-respChan
-		// Force the transfer encoding to chunked so that the response writing
-		// is performed incrementally as response data is available.
-		resp.TransferEncoding = []string{"chunked"}
-		if err := resp.Write(proxyWriter); err != nil {
-			rw.CloseWithError(err)
-			writeErrChan <- err
+		var statusCode int
+		select {
+		case <-r.Context().Done():
+			// The request was cancelled before we received a response.
+		case resp := <-respChan:
+			// Force the transfer encoding to chunked so that the response writing
+			// is performed incrementally as response data is available.
+			resp.TransferEncoding = []string{"chunked"}
+			if err := resp.Write(proxyWriter); err != nil {
+				rw.CloseWithError(err)
+				writeErrChan <- err
+			}
+			statusCode = resp.StatusCode
 		}
 		if metricHandler != nil {
-			go metricHandler.WriteResponseCodeMetric(resp.StatusCode)
+			go metricHandler.WriteResponseCodeMetric(statusCode)
 		}
 	}()
 	return &responseForwarder{rw, postErrChan, writeErrChan}, nil

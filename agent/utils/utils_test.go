@@ -19,6 +19,7 @@ package utils
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"io/ioutil"
@@ -396,16 +397,15 @@ func TestStreamingResponseWriter(t *testing.T) {
 		}
 		gotBody, err := io.ReadAll(resp.Body)
 		if err != nil {
-			t.Errorf("Failure reading the response body for %q: %+v", testCase.Description, err)
+			t.Errorf("Failure reading the response body for %q: %v", testCase.Description, err)
 		} else if got, want := string(gotBody), testCase.WantResponseBody; got != want {
 			t.Errorf("Unexpected response body for %q: got %q, want %q", testCase.Description, got, want)
 		}
-		if len(testCase.WantResponse.Trailer) > 0 {
-			for k, v := range testCase.WantResponse.Trailer {
-				if got, want := resp.Trailer.Get(k), v[0]; got != want {
-					t.Errorf("Unexpected trailer for %q/%q: got %q, want %q", testCase.Description, k, got, want)
-				}
-			}
+		lessFunc := func(a, b string) bool {
+			return a < b
+		}
+		if diff := cmp.Diff(testCase.WantResponse.Trailer, resp.Trailer, cmpopts.SortMaps(lessFunc), cmpopts.SortSlices(lessFunc), cmpopts.EquateEmpty()); len(diff) > 0 {
+			t.Errorf("Unexpected diff for trailers for %q: %s", testCase.Description, diff)
 		}
 	}
 }
@@ -489,6 +489,41 @@ func TestResponseForwarderWithProxyHangup(t *testing.T) {
 	backendHandler.ServeHTTP(responseForwarder, endUserRequest)
 	if err := responseForwarder.Close(); err == nil {
 		t.Errorf("missing expected error forwarding to a closed proxy")
+	}
+}
+
+func TestResponseForwarderWithRequestCancellation(t *testing.T) {
+	const (
+		backendID      = "backend"
+		requestID      = "request"
+		endUserMessage = "hello"
+		backendMessage = "ok"
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	endUserRequest := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(endUserMessage)).WithContext(ctx)
+	errsChan := make(chan error, 1)
+	proxyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer close(errsChan)
+		if _, err := ioutil.ReadAll(r.Body); err != nil {
+			errsChan <- err
+		}
+	}))
+	defer proxyServer.Close()
+	defer proxyServer.CloseClientConnections()
+	proxyClient := proxyServer.Client()
+	_, err := NewResponseForwarder(proxyClient, proxyServer.URL+"/", backendID, requestID, endUserRequest, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	select {
+	case err := <-errsChan:
+		if err != nil {
+			t.Errorf("Unexpected error reading the posted proxy request body: %+v", err)
+		}
+	case <-time.After(time.Second):
+		t.Errorf("Timeout waiting for the proxy request to be posted")
 	}
 }
 
