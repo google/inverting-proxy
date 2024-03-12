@@ -193,6 +193,15 @@ docker run --net=host --rm -it \
 
 And then you can access your backend by vising https://${PROJECT_ID}.appspot.com
 
+#### Dockerfile
+
+You can find the Dockerfile (Debian based) under the `agent` folder. `Dockerfile` build a Go binary 
+using a specific Golang version. It also uses `apt-get` to download other packages.
+
+- curl
+- git
+- [ca-certificates](https://android.googlesource.com/platform/system/ca-certificates/)
+
 ## Limitations
 
 Currently, the App Engine version of the inverting proxy only supports HTTP
