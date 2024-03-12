@@ -195,8 +195,8 @@ And then you can access your backend by vising https://${PROJECT_ID}.appspot.com
 
 #### Dockerfile
 
-You can find the Dockerfile (Debian based) under the `agent` folder. `Dockerfile` build a Go binary 
-using a specific Golang version. It also uses `apt-get` to download other packages.
+There is a `Dockerfile` in the `agent` directory that can be used to build a Docker image for the agent.
+That Docker image contains the agent binary along with the following third-party packages installed via `apt-get`:
 
 - curl
 - git
