@@ -471,7 +471,7 @@ func (w *streamingResponseWriter) WriteHeader(status int) {
 			continue
 		}
 		// Iterate through the values to ensure that subsequent changes to the
-		// headers map does not affect the streamed response.
+		// headers map do not affect the streamed response.
 		for _, v := range vs {
 			header.Add(k, v)
 		}
