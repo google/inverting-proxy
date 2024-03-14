@@ -12,15 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-runtime: go
-api_version: go1
+runtime: go116
 service: api
-
+app_engine_apis: true
 handlers:
   - url: /api/.*
     secure: always
-    script: _go_app
+    script: auto
   - url: /cron/.*
     secure: always
     login: admin
-    script: _go_app
+    script: auto

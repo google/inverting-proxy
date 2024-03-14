@@ -18,8 +18,9 @@ limitations under the License.
 // locally test changes to the code in the agent or server packages
 //
 // Example usage:
-//   go build -o ~/bin/inverting-proxy-run-local testing/runlocal/main.go
-//   ~/bin/inverting-proxy-run-local --port 8081
+//
+//	go build -o ~/bin/inverting-proxy-run-local testing/runlocal/main.go
+//	~/bin/inverting-proxy-run-local --port 8081
 package main
 
 import (

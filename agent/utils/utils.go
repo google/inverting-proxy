@@ -21,6 +21,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -29,7 +30,11 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
+	"os"
+	"os/signal"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"cloud.google.com/go/compute/metadata"
@@ -72,6 +77,15 @@ const (
 
 	// Time to wait on first retry
 	firstRetryWaitDuration = time.Millisecond
+
+	// Max number of retries to perform in case of failed read request calls
+	maxReadRequestRetryCount = 2
+
+	// Max number of retries to perform in case of failed write response calls
+	maxWriteResponseRetryCount = 2
+
+	// Size of the buffer that stores the beginning of read response body
+	readResponseBufSize = 4096
 )
 
 var (
@@ -236,6 +250,28 @@ func ListPendingRequests(client *http.Client, proxyHost, backendID string, metri
 	return parseRequestIDs(proxyResp, metricHandler)
 }
 
+func getRequestWithRetries(client *http.Client, proxyURL, backendID, requestID string) (*http.Response, error) {
+	proxyReq, err := http.NewRequest(http.MethodGet, proxyURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	proxyReq.Header.Add(HeaderBackendID, backendID)
+	proxyReq.Header.Add(HeaderRequestID, requestID)
+	var proxyResp *http.Response
+	for retryCount := 0; retryCount <= maxReadRequestRetryCount; retryCount++ {
+		proxyResp, err = client.Do(proxyReq)
+		if err != nil {
+			continue
+		}
+		if 500 <= proxyResp.StatusCode && proxyResp.StatusCode < 600 {
+			proxyResp.Body.Close()
+			continue
+		}
+		return proxyResp, nil
+	}
+	return proxyResp, err
+}
+
 func parseRequestFromProxyResponse(backendID, requestID string, proxyResp *http.Response, metricHandler *metrics.MetricHandler) (*ForwardedRequest, error) {
 	user := proxyResp.Header.Get(HeaderUserID)
 	startTimeStr := proxyResp.Header.Get(HeaderRequestStartTime)
@@ -268,13 +304,7 @@ func parseRequestFromProxyResponse(backendID, requestID string, proxyResp *http.
 // If the returned request is non-nil, then it is passed to the provided callback.
 func ReadRequest(client *http.Client, proxyHost, backendID, requestID string, callback RequestCallback, metricHandler *metrics.MetricHandler) error {
 	proxyURL := proxyHost + RequestPath
-	proxyReq, err := http.NewRequest(http.MethodGet, proxyURL, nil)
-	if err != nil {
-		return err
-	}
-	proxyReq.Header.Add(HeaderBackendID, backendID)
-	proxyReq.Header.Add(HeaderRequestID, requestID)
-	proxyResp, err := client.Do(proxyReq)
+	proxyResp, err := getRequestWithRetries(client, proxyURL, backendID, requestID)
 	if err != nil {
 		return fmt.Errorf("A proxy request failed: %q", err.Error())
 	}
@@ -287,203 +317,310 @@ func ReadRequest(client *http.Client, proxyHost, backendID, requestID string, ca
 	return callback(client, fr)
 }
 
-// ResponseForwarder implements http.ResponseWriter by dumping a wire-compatible
-// representation of the response to 'proxyWriter' field.
-//
-// ResponseForwarder is used by the agent to forward a response from the backend
-// target to the inverting proxy.
-type ResponseForwarder struct {
-	proxyWriter        *io.PipeWriter
-	startedChan        chan struct{}
-	responseBodyWriter *io.PipeWriter
-
-	// wroteHeader is set when WriteHeader is called. It's used to ensure a
-	// call to WriteHeader before the first call to Write.
-	wroteHeader bool
-
-	// response is synthesized using the backend target response. We use its Write
-	// method as a convenience when forwarding the wire-representation received
-	// by the backend target.
-	response *http.Response
-
-	// header is used to store the response headers prior to sending them.
-	// This is separate from the headers in the response as it includes hop headers,
-	// which will be filtered out before sending the response.
-	header http.Header
-
-	// proxyClientErrors is a channel where any errors issuing a client request to
-	// the proxy server get written.
-	//
-	// This is eventually returned to the caller of the Close method.
-	proxyClientErrors chan error
-
-	// forwardingErrors is a channel where all errors forwarding the streamed
-	// response from the backend to the proxy get written.
-	//
-	// This is eventually returned to the caller of the Close method.
-	forwardingErrors chan error
-
-	// writeErrors is a channel where all errors writing the streamed response
-	// from the backend server get written.
-	//
-	// This is eventually returned to the caller of the Close method.
-	writeErrors chan error
-
-	metricHandler *metrics.MetricHandler
+func newBufferedReadSeeker(r io.Reader, bufSize int) *bufferedReadSeeker {
+	return &bufferedReadSeeker{
+		r:         r,
+		buf:       make([]byte, bufSize),
+		writeHead: 0,
+		readHead:  0,
+	}
 }
 
-// NewResponseForwarder constructs a new ResponseForwarder that forwards to the
-// given proxy for the specified request.
-func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID string) (*ResponseForwarder, error) {
-	// The contortions below support streaming.
-	//
-	// There are two pipes:
-	// 1. proxyReader, proxyWriter: The io.PipeWriter for the HTTP POST to the inverting proxy.
-	//       To this pipe, we write the full HTTP response from the backend target in HTTP
-	//       wire-format form. (Status + Headers + Body + Trailers)
-	//
-	// 2. responseBodyReader, responseBodyWriter: This pipe corresponds to the response body
-	//       from the backend target. To this pipe, we stream each read from backend target.
-	proxyReader, proxyWriter := io.Pipe()
-	startedChan := make(chan struct{}, 1)
-	responseBodyReader, responseBodyWriter := io.Pipe()
+type bufferedReadSeeker struct {
+	r         io.Reader
+	buf       []byte
+	writeHead int
+	readHead  int
+}
 
-	proxyURL := proxyHost + ResponsePath
-	proxyReq, err := http.NewRequest(http.MethodPost, proxyURL, proxyReader)
+func (b *bufferedReadSeeker) Read(p []byte) (int, error) {
+	// Read from buffer.
+	readFromBuf := copy(p, b.buf[b.readHead:b.writeHead])
+	b.readHead += readFromBuf
+	// Read from wrapped source and write to buffer.
+	readFromSource, err := b.r.Read(p[readFromBuf:])
+	written := copy(b.buf[b.writeHead:], p[readFromBuf:(readFromBuf+readFromSource)])
+	b.writeHead += written
+	b.readHead += written
+	return readFromBuf + readFromSource, err
+}
+
+func (b *bufferedReadSeeker) Seek(offset int64, whence int) (int64, error) {
+	if whence != io.SeekStart {
+		return 0, errors.New("only SeekStart offset is supported")
+	}
+	if offset < 0 || offset >= int64(len(b.buf)) {
+		return 0, errors.New("invalid offset value")
+	}
+	if b.writeHead >= len(b.buf) {
+		return 0, errors.New("cannot seek, possible buffer overflow")
+	}
+	b.readHead = int(offset)
+	return int64(b.readHead), nil
+}
+
+func postResponseWithRetries(client *http.Client, proxyURL, backendID, requestID string, proxyReader io.Reader) error {
+	proxyReadSeeker := newBufferedReadSeeker(proxyReader, readResponseBufSize)
+	proxyReq, err := http.NewRequest(http.MethodPost, proxyURL, proxyReadSeeker)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	proxyReq.Header.Set(HeaderBackendID, backendID)
 	proxyReq.Header.Set(HeaderRequestID, requestID)
 	proxyReq.Header.Set("Content-Type", "text/plain")
-
-	proxyClientErrChan := make(chan error, 100)
-	forwardingErrChan := make(chan error, 100)
-	writeErrChan := make(chan error, 100)
-	go func() {
-		// Wait until the response body has started being written
-		// (for a non-empty response) or for the response to
-		// be closed (for an empty response) before triggering
-		// the proxy request round trip.
-		//
-		// This ensures that we do not fetch the bearer token
-		// for the auth header until the last possible moment.
-		// That, in turn. prevents a race condition where the
-		// token expires between the header being generated
-		// and the request being sent to the proxy.
-		<-startedChan
-		if _, err := client.Do(proxyReq); err != nil {
-			proxyClientErrChan <- err
+	var proxyResp *http.Response
+	for retryCount := 0; retryCount <= maxWriteResponseRetryCount; retryCount++ {
+		if proxyResp, err = client.Do(proxyReq); err != nil {
+			if _, seekErr := proxyReadSeeker.Seek(0, io.SeekStart); seekErr != nil {
+				return err
+			}
+			continue
 		}
-		close(proxyClientErrChan)
-	}()
-
-	return &ResponseForwarder{
-		response: &http.Response{
-			Proto:      "HTTP/1.1",
-			ProtoMajor: 1,
-			ProtoMinor: 1,
-			Header:     make(http.Header),
-			Body:       responseBodyReader,
-		},
-		wroteHeader:        false,
-		header:             make(http.Header),
-		proxyWriter:        proxyWriter,
-		startedChan:        startedChan,
-		responseBodyWriter: responseBodyWriter,
-		proxyClientErrors:  proxyClientErrChan,
-		forwardingErrors:   forwardingErrChan,
-		writeErrors:        writeErrChan,
-	}, nil
+		proxyResp.Body.Close()
+		if 500 <= proxyResp.StatusCode && proxyResp.StatusCode < 600 {
+			if _, seekErr := proxyReadSeeker.Seek(0, io.SeekStart); seekErr != nil {
+				return err
+			}
+			continue
+		}
+		return nil
+	}
+	return err
 }
 
-func (rf *ResponseForwarder) notify() {
-	if rf.startedChan != nil {
-		rf.startedChan <- struct{}{}
-		rf.startedChan = nil
+// ResponseWriteCloser combines the http.ResponseWriter and io.Closer interfaces.
+type ResponseWriteCloser interface {
+	http.ResponseWriter
+	io.Closer
+}
+
+// StreamingResponseWriter is a ResponseWriteCloser with an additional method to notify
+// writers that the streamed response is no longer being consumed due to an error.
+type StreamingResponseWriter interface {
+	ResponseWriteCloser
+
+	// CloseWithError signals to any clients of the ResponseWriter that further
+	// writes to the response are not being processed, and specifies the error that
+	// should be returned to those writers to indicate this.
+	//
+	// This should only be called by the code that is processing the written response.
+	CloseWithError(error) error
+}
+
+// NewStreamingResponseWriter returns a ResponseWriteCloser that forwards the written
+// response to the given channel.
+//
+// The response is sent to the given channel as soon as the status code is set, the response
+// body is streamed as soon as each successive call to the ResponseWriter's `Write` method is
+// invoked, and the trailers are made available once the `Close` method is called.
+//
+// The caller that passes this ResponseWriter to an http.Handler is responsible for closing
+// the writer as soon as the call to the handler's `ServeHTTP` method completes.
+//
+// If the caller hits an error before reading all of the streamed returned response's body,
+// then it should call `CloseWithError` to propogate this error to any remaining writers
+// of the response body.
+//
+// Any hop-by-hop headers are filtered out from both the response header and trailer.
+func NewStreamingResponseWriter(respChan chan *http.Response, r *http.Request) StreamingResponseWriter {
+	bodyReader, bodyWriter := io.Pipe()
+	return &streamingResponseWriter{
+		r:          r,
+		respChan:   respChan,
+		header:     make(http.Header),
+		trailer:    make(http.Header),
+		bodyWriter: bodyWriter,
+		bodyReader: bodyReader,
 	}
 }
 
-// Header implements the http.ResponseWriter interface.
-func (rf *ResponseForwarder) Header() http.Header {
-	return rf.header
+type streamingResponseWriter struct {
+	r           *http.Request
+	respChan    chan *http.Response
+	header      http.Header
+	trailer     http.Header
+	wroteHeader bool
+	bodyWriter  *io.PipeWriter
+	bodyReader  *io.PipeReader
 }
 
-// Write implements the http.ResponseWriter interface.
-func (rf *ResponseForwarder) Write(buf []byte) (int, error) {
-	// As in net/http, call WriteHeader if it has not yet been called
-	// before the first call to Write.
-	if !rf.wroteHeader {
-		rf.WriteHeader(http.StatusOK)
-	}
-	rf.notify()
-	count, err := rf.responseBodyWriter.Write(buf)
-	if err != nil {
-		rf.writeErrors <- err
-	}
-	return count, err
+func (w *streamingResponseWriter) Header() http.Header {
+	return w.header
 }
 
-// WriteHeader implements the http.ResponseWriter interface.
-func (rf *ResponseForwarder) WriteHeader(code int) {
-	// As in net/http, ignore multiple calls to WriteHeader.
-	if rf.wroteHeader {
+func (w *streamingResponseWriter) WriteHeader(status int) {
+	if w.wroteHeader {
 		return
 	}
-	rf.wroteHeader = true
-	for k, v := range rf.header {
+	w.wroteHeader = true
+
+	// Initialize the response trailers.
+	w.trailer = make(http.Header)
+	for _, k := range w.Header().Values("Trailer") {
+		// Initialize trailers with empty slices for any pre-declared values.
+		//
+		// This is necessary for the httputil.ReverseProxy type to forward them correctly.
+		// See [here](https://github.com/golang/go/blob/5e3c4016a436c357a57a6f7870913c6911c6904e/src/net/http/httputil/reverseproxy.go#L509)
 		if _, ok := hopHeaders[k]; ok {
 			continue
 		}
-		rf.response.Header[k] = v
+		// We manually call `CanonicalHeaderKey` to preserve the invariant that
+		// all keys in a `Header` instance must be in their canonical format.
+		w.trailer[http.CanonicalHeaderKey(k)] = []string{}
 	}
-	rf.response.StatusCode = code
-	rf.response.Status = http.StatusText(rf.response.StatusCode)
-	// This will write the status and headers immediately and stream the
-	// body using the pipes we've wired.
-	go func() {
-		defer rf.proxyWriter.Close()
-		if err := rf.response.Write(rf.proxyWriter); err != nil {
-			rf.forwardingErrors <- err
 
-			// Normally, the end of this goroutine indicates
-			// that the response.Body reader has returned an EOF,
-			// which means that the corresponding writer has been
-			// closed. However, that is not necessarily the case
-			// if we hit an error in the call to `Write`.
-			//
-			// In this case, there may still be someone writing
-			// to the pipe writer, but we will no longer be reading
-			// anything from the corresponding reader. As such,
-			// we signal that issue to any remaining writers.
-			rf.response.Body.(*io.PipeReader).CloseWithError(err)
+	// Filter out hop-by-hop headers.
+	header := make(http.Header)
+	for k, vs := range w.Header() {
+		if _, ok := hopHeaders[k]; ok {
+			continue
 		}
-		rf.metricHandler.WriteResponseCodeMetric(rf.response.StatusCode)
-		close(rf.forwardingErrors)
-	}()
+		// Iterate through the values to ensure that subsequent changes to the
+		// headers map do not affect the streamed response.
+		for _, v := range vs {
+			header.Add(k, v)
+		}
+	}
+	w.header = header
+
+	// Take the protocol version information for the response from the corresponding request.
+	proto := "HTTP/1.1"
+	protoMajor := 1
+	protoMinor := 1
+	if w.r != nil {
+		proto = w.r.Proto
+		protoMajor = w.r.ProtoMajor
+		protoMinor = w.r.ProtoMinor
+	}
+	w.respChan <- &http.Response{
+		Proto:      proto,
+		ProtoMajor: protoMajor,
+		ProtoMinor: protoMinor,
+		StatusCode: status,
+		Status:     http.StatusText(status),
+		Header:     w.header,
+		Body:       w.bodyReader,
+		Trailer:    w.trailer,
+	}
 }
 
-// Close signals that the response has been fully read from the backend server,
-// waits for that response to be forwarded to the proxy, and then reports any
-// errors that occured while forwarding the response.
-func (rf *ResponseForwarder) Close() error {
-	rf.notify()
-	var errs []error
-	if err := rf.responseBodyWriter.Close(); err != nil {
-		errs = append(errs, err)
+func (w *streamingResponseWriter) Write(bs []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
 	}
-	for err := range rf.proxyClientErrors {
-		errs = append(errs, err)
+	return w.bodyWriter.Write(bs)
+}
+
+func (w *streamingResponseWriter) Close() error {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
 	}
-	for err := range rf.forwardingErrors {
-		errs = append(errs, err)
+	for k, _ := range w.trailer {
+		for _, v := range w.Header().Values(k) {
+			// The `Values` method does not return a copy, so we manually
+			// add each value one at a time to ensure that subsequent changes
+			// to the header do not affect the trailers map.
+			w.trailer.Add(k, v)
+		}
 	}
-	close(rf.writeErrors)
-	for err := range rf.writeErrors {
-		errs = append(errs, err)
+	for k, vs := range w.Header() {
+		var foundPrefix bool
+		k, foundPrefix = strings.CutPrefix(k, http.TrailerPrefix)
+		if !foundPrefix {
+			continue
+		}
+		if _, ok := hopHeaders[k]; ok {
+			continue
+		}
+		for _, v := range vs {
+			w.trailer.Add(k, v)
+		}
 	}
-	if len(errs) > 0 {
-		return fmt.Errorf("Multiple errors closing pipe writers: %s", errs)
+	return w.bodyWriter.Close()
+}
+
+func (w *streamingResponseWriter) CloseWithError(err error) error {
+	return w.bodyReader.CloseWithError(err)
+}
+
+// NewResponseForwarder constructs a new ResponseWriteCloser that forwards to the
+// given proxy for the specified request.
+func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID string, r *http.Request, metricHandler *metrics.MetricHandler) (ResponseWriteCloser, error) {
+	// Construct a streaming response writer so we can process the written response
+	// in separate goroutines as it is written.
+	respChan := make(chan *http.Response, 1)
+	rw := NewStreamingResponseWriter(respChan, r)
+
+	// Construct two ends of a pipe that we will use for concurrently writing the response
+	// to the proxy:
+	//
+	// 1. proxyWriter is used to write out the wire-format of the streamed response to
+	//    the body of the request we forward to the proxy.
+	//
+	//    This is done in a separate goroutine because the `.Write(...)` call on the
+	//    streamed response blocks while the body of the response from the backend is
+	//    being written.
+	// 2. proxyReader is used to read in the body of the request that we forward to the
+	//    proxy.
+	//
+	//    This is done in a separate goroutine because the call to post the request
+	//    to the proxy blocks on that HTTP roundtrip.
+	proxyReader, proxyWriter := io.Pipe()
+
+	// Write the request to the proxy in a separate goroutine.
+	postErrChan := make(chan error, 1)
+	go func() {
+		defer proxyReader.Close()
+		defer close(postErrChan)
+		proxyURL := proxyHost + ResponsePath
+		if err := postResponseWithRetries(client, proxyURL, backendID, requestID, proxyReader); err != nil {
+			postErrChan <- err
+		}
+	}()
+
+	// Write out the wire-format of the streamed response from the backend in order
+	// to be able to forward it to the proxy.
+	writeErrChan := make(chan error, 1)
+	go func() {
+		defer proxyWriter.Close()
+		defer close(writeErrChan)
+		var statusCode int
+		select {
+		case <-r.Context().Done():
+			// The request was cancelled before we received a response.
+		case resp := <-respChan:
+			// Force the transfer encoding to chunked so that the response writing
+			// is performed incrementally as response data is available.
+			resp.TransferEncoding = []string{"chunked"}
+			if err := resp.Write(proxyWriter); err != nil {
+				rw.CloseWithError(err)
+				writeErrChan <- err
+			}
+			statusCode = resp.StatusCode
+		}
+		if metricHandler != nil {
+			go metricHandler.WriteResponseCodeMetric(statusCode)
+		}
+	}()
+	return &responseForwarder{rw, postErrChan, writeErrChan}, nil
+}
+
+type responseForwarder struct {
+	ResponseWriteCloser
+
+	postErrChan  chan error
+	writeErrChan chan error
+}
+
+func (r *responseForwarder) Close() error {
+	if err := r.ResponseWriteCloser.Close(); err != nil {
+		return err
+	}
+	if err := <-r.postErrChan; err != nil {
+		return err
+	}
+	if err := <-r.writeErrChan; err != nil {
+		return err
 	}
 	return nil
 }
@@ -505,4 +642,19 @@ func ExponentialBackoffDuration(retryCount uint) time.Duration {
 func addJitter(duration time.Duration, jitterPercent float64) time.Duration {
 	jitter := 1 - jitterPercent + rand.Float64()*(jitterPercent*2)
 	return time.Duration(float64(duration.Nanoseconds())*jitter) * time.Nanosecond
+}
+
+func ShutdownSignalChan() <-chan struct{} {
+	// Listen for shutdown signal.
+	sigs := make(chan os.Signal, 1)
+	ch := make(chan struct{})
+
+	// SIGINT: The SIGINT (“program interrupt”) signal is sent when the user types the INTR character (Ctrl+C)
+	// SIGTERM: The SIGTERM signal is a generic signal used to cause program termination
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigs
+		close(ch)
+	}()
+	return ch
 }

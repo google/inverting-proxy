@@ -28,9 +28,11 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httputil"
@@ -39,6 +41,7 @@ import (
 	"time"
 
 	"github.com/golang/groupcache/lru"
+	"golang.org/x/net/http2"
 	"golang.org/x/net/publicsuffix"
 	"golang.org/x/oauth2/google"
 	compute "google.golang.org/api/compute/v1"
@@ -60,6 +63,7 @@ var (
 	proxy                     = flag.String("proxy", "", "URL (including scheme) of the inverting proxy")
 	proxyTimeout              = flag.Duration("proxy-timeout", 60*time.Second, "Client timeout when sending requests to the inverting proxy")
 	host                      = flag.String("host", "localhost:8080", "Hostname (including port) of the backend server")
+	forceHTTP2                = flag.Bool("force-http2", false, "Force connections to the backend host to be performed using HTTP/2")
 	backendID                 = flag.String("backend", "", "Unique ID for this backend.")
 	debug                     = flag.Bool("debug", false, "Whether or not to print debug log messages")
 	disableSSLForTest         = flag.Bool("disable-ssl-for-test", false, "Disable requirements for SSL when running tests locally")
@@ -88,16 +92,25 @@ var (
 	monitoringEndpoint       = flag.String("monitoring-endpoint", "monitoring.googleapis.com:443", "The endpoint to which to write metrics. Eg: monitoring.googleapis.com corresponds to Cloud Monarch")
 	monitoringResourceType   = flag.String("monitoring-resource-type", "gce_instance", "The monitoring resource type. Eg: gce_instance")
 	monitoringResourceLabels = flag.String("monitoring-resource-labels", "", "Comma separated key value pairs specifying the resource labels. Eg: 'instance-id=12345678901234,instance-zone=us-west1-a")
+	gracefulShutdownTimeout  = flag.Duration("graceful-shutdown-timeout", 0, "Timeout for graceful shutdown. Enabled only if greater than 0.")
 
 	sessionLRU    *sessions.Cache
 	metricHandler *metrics.MetricHandler
 )
 
-func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) (http.Handler, error) {
+func hostProxy(ctx context.Context, host, shimPath string, injectShimCode, forceHTTP2 bool) (http.Handler, error) {
 	hostProxy := httputil.NewSingleHostReverseProxy(&url.URL{
 		Scheme: "http",
 		Host:   host,
 	})
+	if forceHTTP2 {
+		hostProxy.Transport = &http2.Transport{
+			AllowHTTP: true,
+			DialTLSContext: func(ctx context.Context, network string, addr string, cfg *tls.Config) (net.Conn, error) {
+				return net.Dial(network, addr)
+			},
+		}
+	}
 	hostProxy.FlushInterval = 100 * time.Millisecond
 	var h http.Handler = hostProxy
 	h = sessionLRU.SessionHandler(h, metricHandler)
@@ -143,7 +156,7 @@ func forwardRequest(client *http.Client, hostProxy http.Handler, request *utils.
 	if *stripCredentials {
 		httpRequest.Header.Del(headerAuthorization)
 	}
-	responseForwarder, err := utils.NewResponseForwarder(client, *proxy, request.BackendID, request.RequestID)
+	responseForwarder, err := utils.NewResponseForwarder(client, *proxy, request.BackendID, request.RequestID, request.Contents, metricHandler)
 	if err != nil {
 		return fmt.Errorf("failed to create the response forwarder: %v", err)
 	}
@@ -189,20 +202,27 @@ func processOneRequest(client *http.Client, hostProxy http.Handler, backendID st
 
 // pollForNewRequests repeatedly reaches out to the proxy server to ask if any pending are available, and then
 // processes any newly-seen ones.
-func pollForNewRequests(client *http.Client, hostProxy http.Handler, backendID string) {
+func pollForNewRequests(pollingCtx context.Context, client *http.Client, hostProxy http.Handler, backendID string) {
 	previouslySeenRequests := lru.New(requestCacheLimit)
+
 	var retryCount uint
 	for {
-		if requests, err := utils.ListPendingRequests(client, *proxy, backendID, metricHandler); err != nil {
-			log.Printf("Failed to read pending requests: %q\n", err.Error())
-			time.Sleep(utils.ExponentialBackoffDuration(retryCount))
-			retryCount++
-		} else {
-			retryCount = 0
-			for _, requestID := range requests {
-				if _, ok := previouslySeenRequests.Get(requestID); !ok {
-					previouslySeenRequests.Add(requestID, requestID)
-					go processOneRequest(client, hostProxy, backendID, requestID)
+		select {
+		case <-pollingCtx.Done():
+			log.Printf("Request polling context completed with ctx err: %v\n", pollingCtx.Err())
+			return
+		default:
+			if requests, err := utils.ListPendingRequests(client, *proxy, backendID, metricHandler); err != nil {
+				log.Printf("Failed to read pending requests: %q\n", err.Error())
+				time.Sleep(utils.ExponentialBackoffDuration(retryCount))
+				retryCount++
+			} else {
+				retryCount = 0
+				for _, requestID := range requests {
+					if _, ok := previouslySeenRequests.Get(requestID); !ok {
+						previouslySeenRequests.Add(requestID, requestID)
+						go processOneRequest(client, hostProxy, backendID, requestID)
+					}
 				}
 			}
 		}
@@ -276,7 +296,7 @@ func runHealthChecks() {
 
 // runAdapter sets up the HTTP client for the agent to use (including OAuth credentials),
 // and then does the actual work of forwarding requests and responses.
-func runAdapter(ctx context.Context) error {
+func runAdapter(ctx context.Context, requestPollingCtx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -286,11 +306,11 @@ func runAdapter(ctx context.Context) error {
 	}
 	client.Timeout = *proxyTimeout
 
-	hostProxy, err := hostProxy(ctx, *host, *shimPath, *shimWebsockets)
+	hostProxy, err := hostProxy(ctx, *host, *shimPath, *shimWebsockets, *forceHTTP2)
 	if err != nil {
 		return err
 	}
-	pollForNewRequests(client, hostProxy, *backendID)
+	pollForNewRequests(requestPollingCtx, client, hostProxy, *backendID)
 	return nil
 }
 
@@ -319,7 +339,21 @@ func main() {
 	waitForHealthy()
 	go runHealthChecks()
 
-	if err := runAdapter(ctx); err != nil {
-		log.Fatal(err.Error())
+	requestPollingCtx, requestPollingCancel := context.WithCancel(ctx)
+
+	go func(ctx context.Context) {
+		if err := runAdapter(ctx, requestPollingCtx); err != nil {
+			log.Fatal(err.Error())
+		}
+	}(ctx)
+
+	osShutdownSignalCh := utils.ShutdownSignalChan()
+	<-osShutdownSignalCh
+
+	if *gracefulShutdownTimeout > 0 {
+		requestPollingCancel()
+		log.Printf("Begin graceful shutdown. Wait for: %v\n", *gracefulShutdownTimeout)
+		time.Sleep(*gracefulShutdownTimeout)
+		log.Fatal("Graceful shutdown wait timer end. Shutting down server.")
 	}
 }

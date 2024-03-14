@@ -193,9 +193,22 @@ docker run --net=host --rm -it \
 
 And then you can access your backend by vising https://${PROJECT_ID}.appspot.com
 
+#### Dockerfile
+
+There is a `Dockerfile` in the `agent` directory that can be used to build a Docker image for the agent.
+That Docker image contains the agent binary along with the following third-party packages installed via `apt-get`:
+
+- curl
+- git
+- [ca-certificates](https://android.googlesource.com/platform/system/ca-certificates/)
+
 ## Limitations
 
 Currently, the App Engine version of the inverting proxy only supports HTTP
 requests. In particular, websockets are not supported, so you have to use an
 adapter like socket.io if you want to use the inverting proxy with a service
 that requires websockets.
+
+Additionally, the proxy agent will not work in combination with IAP, as it
+does not currently support using OIDC tokens to authenticate against the
+proxy.

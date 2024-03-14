@@ -18,26 +18,34 @@ package main_test
 
 import (
 	"bytes"
+	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/http/httputil"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
-	"context"
-
 	"github.com/google/uuid"
 	"golang.org/x/net/publicsuffix"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	hellopb "google.golang.org/grpc/examples/helloworld/helloworld"
 )
 
 const (
@@ -139,6 +147,32 @@ func RunBackend(ctx context.Context, t *testing.T) string {
 		backendServer.Close()
 	}()
 	return backendServer.URL
+}
+
+type helloRPCServer struct {
+	hellopb.UnimplementedGreeterServer
+}
+
+func (h *helloRPCServer) SayHello(ctx context.Context, req *hellopb.HelloRequest) (*hellopb.HelloReply, error) {
+	return &hellopb.HelloReply{
+		Message: req.GetName(),
+	}, nil
+}
+
+func RunGRPCBackend(ctx context.Context, t *testing.T) (string, error) {
+	grpcServer := grpc.NewServer()
+	hellopb.RegisterGreeterServer(grpcServer, &helloRPCServer{})
+	lis, err := net.Listen("tcp", ":0")
+	if err != nil {
+		return "", fmt.Errorf("failure listening on a TCP port: %w", err)
+	}
+	go grpcServer.Serve(lis)
+	go func() {
+		<-ctx.Done()
+		grpcServer.Stop()
+		lis.Close()
+	}()
+	return lis.Addr().String(), nil
 }
 
 func RunFakeMetadataServer(ctx context.Context, t *testing.T) string {
@@ -318,5 +352,174 @@ func TestWithInMemoryProxyAndBackendWithSessions(t *testing.T) {
 		if err := checkRequest(proxyURL, testPath, testPath, 100*time.Millisecond, sessionCookie); err != nil {
 			t.Fatalf("Failed to send request %d: %v", i, err)
 		}
+	}
+}
+
+func TestGracefulShutdown(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	backendHomeDir, err := ioutil.TempDir("", "backend-home")
+	if err != nil {
+		t.Fatalf("Failed to set up a temporary home directory for the test: %v", err)
+	}
+	gcloudCfg := filepath.Join(backendHomeDir, ".config", "gcloud")
+	if err := os.MkdirAll(gcloudCfg, os.ModePerm); err != nil {
+		t.Fatalf("Failed to set up a temporary home directory for the test: %v", err)
+	}
+	backendURL := RunBackend(ctx, t)
+	fakeMetadataURL := RunFakeMetadataServer(ctx, t)
+
+	parsedBackendURL, err := url.Parse(backendURL)
+	if err != nil {
+		t.Fatalf("Failed to parse the backend URL: %v", err)
+	}
+	proxyPort, err := RunLocalProxy(ctx, t)
+	proxyURL := fmt.Sprintf("http://localhost:%d", proxyPort)
+	if err != nil {
+		t.Fatalf("Failed to run the local inverting proxy: %v", err)
+	}
+	t.Logf("Started backend at localhost:%s and proxy at %s", parsedBackendURL.Port(), proxyURL)
+
+	// This assumes that "Make build" has been run
+	args := strings.Join(append(
+		[]string{"${GOPATH}/bin/proxy-forwarding-agent"},
+		"--debug=true",
+		"--graceful-shutdown-timeout=1s",
+		"--backend=testBackend",
+		"--proxy", proxyURL+"/",
+		"--host=localhost:"+parsedBackendURL.Port()),
+		" ")
+	agentCmd := exec.CommandContext(ctx, "/bin/bash", "-c", args)
+
+	var out bytes.Buffer
+	agentCmd.Stdout = &out
+	agentCmd.Stderr = &out
+	agentCmd.Env = append(os.Environ(), "PATH=", "HOME="+backendHomeDir, "GCE_METADATA_HOST="+strings.TrimPrefix(fakeMetadataURL, "http://"))
+	if err := agentCmd.Start(); err != nil {
+		t.Fatalf("Failed to start the agent binary: %v", err)
+	}
+	defer func() {
+		cancel()
+		err := agentCmd.Wait()
+		t.Logf("Agent result: %v, stdout/stderr: %q", err, out.String())
+	}()
+
+	// Send one request through the proxy to make sure the agent has come up.
+	//
+	// We give this initial request a long time to complete, as the agent takes
+	// a long time to start up.
+	testPath := "/some/request/path"
+	if err := checkRequest(proxyURL, testPath, testPath, time.Second, backendCookie); err != nil {
+		t.Fatalf("Failed to send the initial request: %v", err)
+	}
+
+	for i := 0; i < 10; i++ {
+		// The timeout below was chosen to be overly generous to prevent test flakiness.
+		//
+		// This has the consequence that it will only catch severe latency regressions.
+		//
+		// The specific value was chosen by running the test in a loop 100 times and
+		// incrementing the value until all 100 runs passed.
+		if err := checkRequest(proxyURL, testPath, testPath, 100*time.Millisecond, backendCookie); err != nil {
+			t.Fatalf("Failed to send request %d: %v", i, err)
+		}
+	}
+
+	agentCmd.Process.Signal(syscall.SIGINT)
+	waitCh := make(chan struct{})
+	waitCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	go func() {
+		agentCmd.Wait()
+		close(waitCh)
+	}()
+
+	for {
+		select {
+		case <-waitCh:
+			return
+		case <-waitCtx.Done():
+			t.Fatal("Timed out waiting for the agent to exit.")
+			return
+		}
+	}
+}
+
+func TestHTTP2Backend(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	backendHomeDir, err := ioutil.TempDir("", "backend-home")
+	if err != nil {
+		t.Fatalf("Failed to set up a temporary home directory for the test: %v", err)
+	}
+	gcloudCfg := filepath.Join(backendHomeDir, ".config", "gcloud")
+	if err := os.MkdirAll(gcloudCfg, os.ModePerm); err != nil {
+		t.Fatalf("Failed to set up a temporary home directory for the test: %v", err)
+	}
+	fakeMetadataURL := RunFakeMetadataServer(ctx, t)
+	backendHost, err := RunGRPCBackend(ctx, t)
+	if err != nil {
+		t.Fatalf("Failure running a gRPC backend: %v", err)
+	}
+	proxyPort, err := RunLocalProxy(ctx, t)
+	if err != nil {
+		t.Fatalf("Failure running the local proxy: %v", err)
+	}
+	proxyURL := &url.URL{
+		Scheme: "http",
+		Host:   fmt.Sprintf("localhost:%d", proxyPort),
+	}
+	t.Logf("Started backend at %s and proxy at %s", backendHost, proxyURL.String())
+
+	// This assumes that "Make build" has been run
+	args := strings.Join(append(
+		[]string{"${GOPATH}/bin/proxy-forwarding-agent"},
+		"--debug=true",
+		"--backend=testBackend",
+		"--proxy", proxyURL.String()+"/",
+		"--disable-ssl-for-test=true",
+		"--force-http2",
+		"--host="+backendHost),
+		" ")
+	agentCmd := exec.CommandContext(ctx, "/bin/bash", "-c", args)
+
+	var out bytes.Buffer
+	agentCmd.Stdout = &out
+	agentCmd.Stderr = &out
+	agentCmd.Env = append(os.Environ(), "PATH=", "HOME="+backendHomeDir, "GCE_METADATA_HOST="+strings.TrimPrefix(fakeMetadataURL, "http://"))
+	if err := agentCmd.Start(); err != nil {
+		t.Fatalf("Failed to start the agent binary: %v", err)
+	}
+	defer func() {
+		cancel()
+		err := agentCmd.Wait()
+		t.Logf("Agent result: %v, stdout/stderr: %q", err, out.String())
+	}()
+
+	// Wrap the in-memory proxy with a test server that supports TLS
+	tlsProxy := httputil.NewSingleHostReverseProxy(proxyURL)
+	tlsProxyServer := httptest.NewUnstartedServer(tlsProxy)
+	tlsProxyServer.EnableHTTP2 = true
+	tlsProxyServer.StartTLS()
+	defer tlsProxyServer.Close()
+	certPool := x509.NewCertPool()
+	certPool.AddCert(tlsProxyServer.Certificate())
+	clientTransportCredentials := credentials.NewTLS(&tls.Config{
+		RootCAs: certPool,
+	})
+	conn, err := grpc.Dial(strings.TrimPrefix(tlsProxyServer.URL, "https://"), grpc.WithTransportCredentials(clientTransportCredentials))
+	if err != nil {
+		t.Fatalf("Failed to dial the gRPC connection: %v", err)
+	}
+	defer conn.Close()
+	helloClient := hellopb.NewGreeterClient(conn)
+	name := "Example Name"
+	resp, err := helloClient.SayHello(ctx, &hellopb.HelloRequest{Name: name})
+	if err != nil {
+		t.Errorf("helloClient.SayHello: %v", err)
+	} else if got, want := resp.Message, name; got != want {
+		t.Errorf("Unexpected response from SayHello: got %q, want %q", got, want)
 	}
 }

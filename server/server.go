@@ -17,8 +17,9 @@ limitations under the License.
 // Command server launches a stand-alone inverting proxy.
 //
 // Example usage:
-//   go build -o ~/bin/inverting-proxy ./server/server.go
-//   ~/bin/inverting-proxy --port 8081
+//
+//	go build -o ~/bin/inverting-proxy ./server/server.go
+//	~/bin/inverting-proxy --port 8081
 package main
 
 import (
@@ -229,26 +230,35 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case p.requestIDs <- id:
 	}
 	log.Printf("Request %q enqueued after %s", id, time.Since(pending.startTime))
-
 	// Pull out and copy the response
+	defer log.Printf("Response for %q received after %s", id, time.Since(pending.startTime))
 	select {
 	case <-r.Context().Done():
 		// The client request was cancelled
 		log.Printf("Timeout waiting for the response to %q", id)
 		return
 	case resp := <-pending.respChan:
-		defer resp.Body.Close()
 		// Copy all of the non-hop-by-hop headers to the proxied response
 		for name, vals := range resp.Header {
-			if !isHopByHopHeader(name) {
-				w.Header()[name] = vals
+			if isHopByHopHeader(name) {
+				continue
 			}
+			w.Header()[name] = vals
 		}
+		w.Header().Add("transfer-encoding", "chunked")
 		w.WriteHeader(resp.StatusCode)
 		io.Copy(w, resp.Body)
+		resp.Body.Close()
+		for name, vals := range resp.Trailer {
+			if isHopByHopHeader(name) {
+				continue
+			}
+			for _, v := range vals {
+				w.Header().Add(http.TrailerPrefix+name, v)
+			}
+		}
 		return
 	}
-	log.Printf("Response for %q received after %s", id, time.Since(pending.startTime))
 }
 
 func main() {
