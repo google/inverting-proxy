@@ -487,7 +487,7 @@ func (w *streamingResponseWriter) WriteHeader(status int) {
 		protoMajor = w.r.ProtoMajor
 		protoMinor = w.r.ProtoMinor
 	}
-	w.respChan <- &http.Response{
+	resp := &http.Response{
 		Proto:      proto,
 		ProtoMajor: protoMajor,
 		ProtoMinor: protoMinor,
@@ -496,6 +496,11 @@ func (w *streamingResponseWriter) WriteHeader(status int) {
 		Header:     w.header,
 		Body:       w.bodyReader,
 		Trailer:    w.trailer,
+	}
+	select {
+	case w.respChan <- resp:
+	case <-w.r.Context().Done():
+		w.bodyReader.Close()
 	}
 }
 
@@ -543,7 +548,7 @@ func (w *streamingResponseWriter) CloseWithError(err error) error {
 func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID string, r *http.Request, metricHandler *metrics.MetricHandler) (ResponseWriteCloser, error) {
 	// Construct a streaming response writer so we can process the written response
 	// in separate goroutines as it is written.
-	respChan := make(chan *http.Response, 1)
+	respChan := make(chan *http.Response)
 	rw := NewStreamingResponseWriter(respChan, r)
 
 	// Construct two ends of a pipe that we will use for concurrently writing the response

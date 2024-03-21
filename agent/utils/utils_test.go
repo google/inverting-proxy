@@ -512,11 +512,16 @@ func TestResponseForwarderWithRequestCancellation(t *testing.T) {
 	defer proxyServer.Close()
 	defer proxyServer.CloseClientConnections()
 	proxyClient := proxyServer.Client()
-	_, err := NewResponseForwarder(proxyClient, proxyServer.URL+"/", backendID, requestID, endUserRequest, nil)
+	rf, err := NewResponseForwarder(proxyClient, proxyServer.URL+"/", backendID, requestID, endUserRequest, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	cancel()
+	rf.WriteHeader(http.StatusOK)
+	_, err = rf.Write([]byte(http.StatusText(http.StatusOK)))
+	if got, want := err, io.ErrClosedPipe; got != want {
+		t.Errorf("Unexepcted error writing a response for a cancelled request: got %v, want %v", got, want)
+	}
 	select {
 	case err := <-errsChan:
 		if err != nil {
