@@ -18,6 +18,7 @@ package websockets
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -31,8 +32,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"text/template"
-
-	"context"
 	"github.com/google/inverting-proxy/agent/metrics"
 )
 
@@ -488,6 +487,7 @@ func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost b
 			statusCode := http.StatusBadRequest
 			http.Error(w, fmt.Sprintf("attempt to read data from a closed session: %q", msg.ID), statusCode)
 			metricHandler.WriteResponseCodeMetric(statusCode)
+			connections.Delete(msg.ID)
 			return
 		} else if serverMsgs == nil {
 			statusCode := http.StatusRequestTimeout
