@@ -26,15 +26,15 @@ ADD ./ /opt/src/github.com/google/inverting-proxy
 WORKDIR /opt/src/github.com/google/inverting-proxy
 
 
-RUN curl -o /opt/go1.21.7.linux-amd64.tar.gz \
-      https://storage.googleapis.com/golang/go1.21.7.linux-amd64.tar.gz && \
-    tar -C /usr/local -xzf /opt/go1.21.7.linux-amd64.tar.gz && \
+RUN curl -o /opt/go1.21.11.linux-amd64.tar.gz \
+      https://storage.googleapis.com/golang/go1.21.11.linux-amd64.tar.gz && \
+    tar -C /usr/local -xzf /opt/go1.21.11.linux-amd64.tar.gz && \
     export PATH=${PATH}:/usr/local/go/bin/:/opt/bin/ && \
     export GOPATH=/opt/ && \
     echo "Building Proxy Agent" && \
     go build -o ${GOPATH}/bin/proxy-forwarding-agent /opt/src/github.com/google/inverting-proxy/agent/agent.go && \
     echo "Clean up go files and preserve License" && \
-    rm -rf /opt/go1.21.7.linux-amd64.tar.gz && \    
+    rm -rf /opt/go1.21.11.linux-amd64.tar.gz && \    
     find /usr/local/go/ -mindepth 1 ! -name 'LICENSE' -exec rm -rf {} + || true
 
 ENV DEBUG "false"
