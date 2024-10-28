@@ -62,6 +62,7 @@ type Connection struct {
 	clientMessages  chan *message
 	serverMessages  chan *message
 	protocolVersion int
+	subprotocol     string
 }
 
 // This map defines the set of headers that should be stripped from the WS request, as they
@@ -169,6 +170,7 @@ func NewConnection(ctx context.Context, targetURL string, header http.Header, er
 		cancel:         cancel,
 		clientMessages: clientMessages,
 		serverMessages: serverMessages,
+		subprotocol: serverConn.Subprotocol(),
 	}, nil
 }
 
@@ -262,6 +264,11 @@ func (conn *Connection) ReadServerMessages() ([]interface{}, error) {
 	case <-time.After(time.Second * 20):
 		return nil, nil
 	}
+}
+
+// Subprotocol reports the websocket subprotocol (if any) that was accepted by the server.
+func (conn *Connection) Subprotocol() string {
+	return conn.subprotocol
 }
 
 // injectWebsocketMessage injects a shim header value into a single websocket message in-place.
