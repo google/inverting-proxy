@@ -128,6 +128,7 @@ func Handler(backendPort int, passthroughHandler http.Handler) http.Handler {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		defer backendConn.Close()
 		var wg sync.WaitGroup
 		wg.Add(2)
 		go func() {
