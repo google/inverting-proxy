@@ -22,7 +22,7 @@ import (
 	"time"
 
 	monitoring "cloud.google.com/go/monitoring/apiv3"
-	googlepb "github.com/golang/protobuf/ptypes/timestamp"
+	googlepb "google.golang.org/protobuf/types/known/timestamppb"
 	gax "github.com/googleapis/gax-go/v2"
 	apioption "google.golang.org/api/option"
 	metricpb "google.golang.org/genproto/googleapis/api/metric"
