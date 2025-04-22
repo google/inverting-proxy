@@ -210,7 +210,7 @@ func requestHandler(ctx context.Context, s types.Store, w http.ResponseWriter, r
 	requestID := r.Header.Get(HeaderRequestID)
 	if requestID == "" {
 		errorMsg := "No request ID specified"
-		log.Printf(errorMsg)
+		log.Println(errorMsg)
 		http.Error(w, errorMsg, http.StatusBadRequest)
 		return
 	}
@@ -219,7 +219,7 @@ func requestHandler(ctx context.Context, s types.Store, w http.ResponseWriter, r
 	request, err := s.ReadRequest(ctx, backendID, requestID)
 	if err != nil {
 		errorMsg := fmt.Sprintf("Failed to read the request for %q: %q", requestID, err.Error())
-		log.Printf(errorMsg)
+		log.Println(errorMsg)
 		http.Error(w, errorMsg, http.StatusNotFound)
 		return
 	}
@@ -240,7 +240,7 @@ func responseHandler(ctx context.Context, s types.Store, w http.ResponseWriter, 
 	response, err := parseResponse(backendID, r)
 	if err != nil {
 		errorMsg := fmt.Sprintf("Failed to read the response body: %q", err.Error())
-		log.Printf(errorMsg)
+		log.Println(errorMsg)
 		http.Error(w, errorMsg, http.StatusBadRequest)
 		return
 	}
@@ -250,7 +250,7 @@ func responseHandler(ctx context.Context, s types.Store, w http.ResponseWriter, 
 	close(notFoundErrs)
 	if len(notFoundErrs) > 0 {
 		notFoundErr := <-notFoundErrs
-		log.Printf(notFoundErr.Error())
+		log.Println(notFoundErr.Error())
 		http.Error(w, notFoundErr.Error(), http.StatusNotFound)
 		return
 	}
