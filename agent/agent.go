@@ -31,6 +31,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -44,7 +45,7 @@ import (
 	"golang.org/x/net/http2"
 	"golang.org/x/net/publicsuffix"
 	"golang.org/x/oauth2/google"
-	compute "google.golang.org/api/compute/v1"
+	"google.golang.org/api/compute/v1"
 
 	"github.com/google/inverting-proxy/agent/banner"
 	"github.com/google/inverting-proxy/agent/metrics"
@@ -61,7 +62,8 @@ const (
 
 var (
 	proxy                     = flag.String("proxy", "", "URL (including scheme) of the inverting proxy")
-	proxyTimeout              = flag.Duration("proxy-timeout", 60*time.Second, "Client timeout when sending requests to the inverting proxy")
+	proxyTimeout              = flag.Duration("proxy-timeout", 60*time.Second, "Client timeout for pulling requests from the inverting proxy and forwarding them to the backends")
+	listRequestsTimeout       = flag.Duration("list-requests-timeout", 0*time.Second, "Client timeout for listing requests from the inverting proxy. Defaults to proxy-timeout value")
 	host                      = flag.String("host", "localhost:8080", "Hostname (including port) of the backend server")
 	forceHTTP2                = flag.Bool("force-http2", false, "Force connections to the backend host to be performed using HTTP/2")
 	backendID                 = flag.String("backend", "", "Unique ID for this backend.")
@@ -178,10 +180,15 @@ func healthCheck() error {
 		log.Printf("Health Check request failed: %s", err.Error())
 		return err
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			log.Printf("Body.Close failed %s", err.Error())
+		}
+	}(resp.Body)
 	if resp.StatusCode != 200 {
 		log.Printf("Health Check request had non-200 status code: %d", resp.StatusCode)
-		return fmt.Errorf("Bad Health Check Response Code: %s", resp.Status)
+		return fmt.Errorf("bad Health Check Response Code: %s", resp.Status)
 	}
 	return nil
 }
@@ -202,7 +209,7 @@ func processOneRequest(client *http.Client, hostProxy http.Handler, backendID st
 
 // pollForNewRequests repeatedly reaches out to the proxy server to ask if any pending are available, and then
 // processes any newly-seen ones.
-func pollForNewRequests(pollingCtx context.Context, client *http.Client, hostProxy http.Handler, backendID string) {
+func pollForNewRequests(pollingCtx context.Context, listRequestsClient, client *http.Client, hostProxy http.Handler, backendID string) {
 	previouslySeenRequests := lru.New(requestCacheLimit)
 
 	var retryCount uint
@@ -212,11 +219,17 @@ func pollForNewRequests(pollingCtx context.Context, client *http.Client, hostPro
 			log.Printf("Request polling context completed with ctx err: %v\n", pollingCtx.Err())
 			return
 		default:
-			if requests, err := utils.ListPendingRequests(client, *proxy, backendID, metricHandler); err != nil {
+			start := time.Now()
+			log.Printf("About to ListPendingRequests. retryCount = %v\n", retryCount)
+			if requests, err := utils.ListPendingRequests(listRequestsClient, *proxy, backendID, metricHandler); err != nil {
 				log.Printf("Failed to read pending requests: %q\n", err.Error())
 				time.Sleep(utils.ExponentialBackoffDuration(retryCount))
+				log.Printf("Slept for %v on attempt %v\n", utils.ExponentialBackoffDuration(retryCount), retryCount)
 				retryCount++
 			} else {
+				if *debug {
+					log.Printf("List %v pending request(s) took %v\n", len(requests), time.Since(start))
+				}
 				retryCount = 0
 				for _, requestID := range requests {
 					if _, ok := previouslySeenRequests.Get(requestID); !ok {
@@ -305,12 +318,28 @@ func runAdapter(ctx context.Context, requestPollingCtx context.Context) error {
 		return err
 	}
 	client.Timeout = *proxyTimeout
+	if *debug {
+		log.Printf("Client timeout: %v\n", client.Timeout)
+	}
+
+	listRequestsClient, err := getGoogleClient(ctx)
+	if err != nil {
+		return err
+	}
+	timeout := *listRequestsTimeout
+	if timeout == 0 {
+		timeout = *proxyTimeout
+	}
+	listRequestsClient.Timeout = timeout
+	if *debug {
+		log.Printf("List requests timeout: %v\n", listRequestsClient.Timeout)
+	}
 
 	hostProxy, err := hostProxy(ctx, *host, *shimPath, *shimWebsockets, *forceHTTP2)
 	if err != nil {
 		return err
 	}
-	pollForNewRequests(requestPollingCtx, client, hostProxy, *backendID)
+	pollForNewRequests(requestPollingCtx, listRequestsClient, client, hostProxy, *backendID)
 	return nil
 }
 

@@ -24,7 +24,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"net/http"
 	"net/http/cookiejar"
@@ -59,7 +58,7 @@ func checkRequest(proxyURL, testPath, want string, timeout time.Duration, expect
 	}
 	jar, err := cookiejar.New(&jarOptions)
 	if err != nil {
-		return fmt.Errorf("Failure creating a cookie jar: %v", err)
+		return fmt.Errorf("failure creating a cookie jar: %v", err)
 	}
 	client := &http.Client{
 		Timeout: timeout,
@@ -75,7 +74,7 @@ func checkRequest(proxyURL, testPath, want string, timeout time.Duration, expect
 		return fmt.Errorf("failed to issue a frontend GET request: %v", err)
 	}
 	defer resp.Body.Close()
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("failed to read the response body: %v", err)
 	}
@@ -120,7 +119,7 @@ func RunLocalProxy(ctx context.Context, t *testing.T) (int, error) {
 		t.Logf("Waiting for the locally running proxy to start...")
 		time.Sleep(1 * time.Second)
 	}
-	return 0, fmt.Errorf("Locally-running proxy failed to start up in time: %q", proxyOut.String())
+	return 0, fmt.Errorf("locally-running proxy failed to start up in time: %q", proxyOut.String())
 }
 
 func RunBackend(ctx context.Context, t *testing.T) string {
@@ -213,7 +212,7 @@ func TestWithInMemoryProxyAndBackend(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	backendHomeDir, err := ioutil.TempDir("", "backend-home")
+	backendHomeDir, err := os.MkdirTemp("", "backend-home")
 	if err != nil {
 		t.Fatalf("Failed to set up a temporary home directory for the test: %v", err)
 	}
@@ -241,6 +240,8 @@ func TestWithInMemoryProxyAndBackend(t *testing.T) {
 		"--debug=true",
 		"--backend=testBackend",
 		"--proxy", proxyURL+"/",
+		"--proxy-timeout=45s",
+		"--list-requests-timeout=10ms",
 		"--host=localhost:"+parsedBackendURL.Port()),
 		" ")
 	agentCmd := exec.CommandContext(ctx, "/bin/bash", "-c", args)
@@ -284,7 +285,7 @@ func TestWithInMemoryProxyAndBackendWithSessions(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	backendHomeDir, err := ioutil.TempDir("", "backend-home")
+	backendHomeDir, err := os.MkdirTemp("", "backend-home")
 	if err != nil {
 		t.Fatalf("Failed to set up a temporary home directory for the test: %v", err)
 	}
@@ -359,7 +360,7 @@ func TestGracefulShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	backendHomeDir, err := ioutil.TempDir("", "backend-home")
+	backendHomeDir, err := os.MkdirTemp("", "backend-home")
 	if err != nil {
 		t.Fatalf("Failed to set up a temporary home directory for the test: %v", err)
 	}
@@ -450,7 +451,7 @@ func TestHTTP2Backend(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	backendHomeDir, err := ioutil.TempDir("", "backend-home")
+	backendHomeDir, err := os.MkdirTemp("", "backend-home")
 	if err != nil {
 		t.Fatalf("Failed to set up a temporary home directory for the test: %v", err)
 	}

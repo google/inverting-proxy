@@ -1,6 +1,6 @@
 module github.com/google/inverting-proxy
 
-go 1.18
+go 1.23.0
 
 require (
 	cloud.google.com/go/compute/metadata v0.2.3

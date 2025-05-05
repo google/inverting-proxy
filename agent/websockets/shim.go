@@ -328,9 +328,9 @@ func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost b
 			}
 		}
 		resp := &sessionMessage{
-			ID:      sessionID,
-			Message: targetURL.String(),
-			Version: conn.protocolVersion,
+			ID:          sessionID,
+			Message:     targetURL.String(),
+			Version:     conn.protocolVersion,
 			Subprotocol: conn.Subprotocol(),
 		}
 		respBytes, err := json.Marshal(resp)
