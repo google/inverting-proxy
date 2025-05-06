@@ -355,17 +355,18 @@ func TestWithInMemoryProxyAndBackendWithSessions(t *testing.T) {
 	}
 }
 
-func TestProxyTimeout(t *testing.T) {
-	// First test with a short timeout to ensure we get timeouts
+func TestProxyTimeoutWithShortTimeout(t *testing.T) {
 	proxyTimeout := "10ms"
 	requestForwardingTimeout := "60s"
 	wantTimeout := true
 
 	timeoutTest(t, proxyTimeout, requestForwardingTimeout, wantTimeout)
+}
 
-	// Now test with a long-ish timeout to ensure we don't get timeouts
-	proxyTimeout = "60s"
-	wantTimeout = false
+func TestProxyTimeoutWithLongTimeout(t *testing.T) {
+	proxyTimeout := "60s"
+	requestForwardingTimeout := "60s"
+	wantTimeout := false
 
 	timeoutTest(t, proxyTimeout, requestForwardingTimeout, wantTimeout)
 }
