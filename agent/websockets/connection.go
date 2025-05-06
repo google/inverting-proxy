@@ -163,7 +163,7 @@ func NewConnection(ctx context.Context, targetURL string, header http.Header, er
 		cancel:         cancel,
 		clientMessages: clientMessages,
 		serverMessages: serverMessages,
-		subprotocol:    serverConn.Subprotocol(),
+		subprotocol: serverConn.Subprotocol(),
 	}, nil
 }
 
