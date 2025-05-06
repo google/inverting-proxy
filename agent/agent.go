@@ -308,9 +308,9 @@ func runAdapter(ctx context.Context, requestPollingCtx context.Context) error {
 		return err
 	}
 
-	// If requestForwardingTimeout is set and is larger than proxyTimeout, use it. Otherwise, use proxyTimeout.
+	// If requestForwardingTimeout is larger than proxyTimeout, use it. Otherwise, use proxyTimeout.
 	requestForwardingTimeoutToUse := *proxyTimeout
-	if requestForwardingTimeoutToUse > 0 && *requestForwardingTimeout > *proxyTimeout {
+	if *requestForwardingTimeout > *proxyTimeout {
 		requestForwardingTimeoutToUse = *requestForwardingTimeout
 	}
 
