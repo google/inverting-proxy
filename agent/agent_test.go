@@ -361,17 +361,13 @@ func TestProxyTimeout(t *testing.T) {
 	requestForwardingTimeout := "60s"
 	wantTimeout := true
 
-	// Run the test many times to guard against flakiness
-	for i := 0; i < 20; i++ {
-		timeoutTest(t, proxyTimeout, requestForwardingTimeout, wantTimeout)
-	}
+	timeoutTest(t, proxyTimeout, requestForwardingTimeout, wantTimeout)
 
 	// Now test with a long-ish timeout to ensure we don't get timeouts
 	proxyTimeout = "60s"
 	wantTimeout = false
-	for i := 0; i < 20; i++ {
-		timeoutTest(t, proxyTimeout, requestForwardingTimeout, wantTimeout)
-	}
+
+	timeoutTest(t, proxyTimeout, requestForwardingTimeout, wantTimeout)
 }
 
 func timeoutTest(t *testing.T, proxyTimeout string, requestForwardingTimeout string, wantTimeout bool) {

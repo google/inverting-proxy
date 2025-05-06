@@ -62,7 +62,7 @@ const (
 var (
 	proxy                     = flag.String("proxy", "", "URL (including scheme) of the inverting proxy")
 	proxyTimeout              = flag.Duration("proxy-timeout", 60*time.Second, "Timeout for polling the inverting proxy for new requests")
-	requestForwardingTimeout  = flag.Duration("request-forwarding-timeout", 0*time.Second, "Timeout for forwarding individual requests to the backend and returning a response (default same as proxy-timeout)")
+	requestForwardingTimeout  = flag.Duration("request-forwarding-timeout", 0*time.Second, "Timeout for forwarding individual requests to the backend and returning a response (matches proxy-timeout by default)")
 	host                      = flag.String("host", "localhost:8080", "Hostname (including port) of the backend server")
 	forceHTTP2                = flag.Bool("force-http2", false, "Force connections to the backend host to be performed using HTTP/2")
 	backendID                 = flag.String("backend", "", "Unique ID for this backend.")
