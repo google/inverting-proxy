@@ -308,15 +308,11 @@ func runAdapter(ctx context.Context, requestPollingCtx context.Context) error {
 		return err
 	}
 
-	// If requestForwardingTimeout is larger than proxyTimeout, use it. Otherwise, use proxyTimeout.
-	requestForwardingTimeoutToUse := *proxyTimeout
-	if *requestForwardingTimeout > *proxyTimeout {
-		requestForwardingTimeoutToUse = *requestForwardingTimeout
-	}
+	// Request forwarding should use the larger of proxyTimeout and requestForwardingTimeout
+	effectiveRequestForwardingTimeout := max(*proxyTimeout, *requestForwardingTimeout)
+	client.Timeout = effectiveRequestForwardingTimeout
 
-	client.Timeout = requestForwardingTimeoutToUse
-
-	log.Printf("Request forwarding timeout is %v; proxy timeout is %v\n", requestForwardingTimeoutToUse, *proxyTimeout)
+	log.Printf("Request forwarding timeout is %v; proxy timeout is %v\n", effectiveRequestForwardingTimeout, *proxyTimeout)
 
 	hostProxy, err := hostProxy(ctx, *host, *shimPath, *shimWebsockets, *forceHTTP2)
 	if err != nil {

@@ -356,13 +356,29 @@ func TestWithInMemoryProxyAndBackendWithSessions(t *testing.T) {
 }
 
 func TestProxyTimeout(t *testing.T) {
+	// First test with a short timeout to ensure we get timeouts
+	proxyTimeout := "10ms"
+	requestForwardingTimeout := "60s"
+	wantTimeout := true
+
+	// Run the test many times to guard against flakiness
+	for i := 0; i < 20; i++ {
+		timeoutTest(t, proxyTimeout, requestForwardingTimeout, wantTimeout)
+	}
+
+	// Now test with a long-ish timeout to ensure we don't get timeouts
+	proxyTimeout = "60s"
+	wantTimeout = false
+	for i := 0; i < 20; i++ {
+		timeoutTest(t, proxyTimeout, requestForwardingTimeout, wantTimeout)
+	}
+}
+
+func timeoutTest(t *testing.T, proxyTimeout string, requestForwardingTimeout string, wantTimeout bool) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	backendHomeDir, err := ioutil.TempDir("", "backend-home")
-	if err != nil {
-		t.Fatalf("Failed to set up a temporary home directory for the test: %v", err)
-	}
+	backendHomeDir := filepath.Join(t.TempDir(), "backend-home")
 	gcloudCfg := filepath.Join(backendHomeDir, ".config", "gcloud")
 	if err := os.MkdirAll(gcloudCfg, os.ModePerm); err != nil {
 		t.Fatalf("Failed to set up a temporary home directory for the test: %v", err)
@@ -386,8 +402,8 @@ func TestProxyTimeout(t *testing.T) {
 		[]string{"${GOPATH}/bin/proxy-forwarding-agent"},
 		"--backend=testBackend",
 		"--proxy", proxyURL+"/",
-		"--proxy-timeout=10ms", // Use a very short timeout to force a timeout error
-		"--request-forwarding-timeout=80s",
+		"--proxy-timeout="+proxyTimeout,
+		"--request-forwarding-timeout="+requestForwardingTimeout,
 		"--host=localhost:"+parsedBackendURL.Port()),
 		" ")
 	agentCmd := exec.CommandContext(ctx, "/bin/bash", "-c", args)
@@ -405,8 +421,9 @@ func TestProxyTimeout(t *testing.T) {
 
 		s := out.String()
 		t.Logf("Agent result: %v, stdout/stderr: %q", err, s)
-		if !strings.Contains(s, "context deadline exceeded") {
-			t.Errorf("Timeout should have occurred but didn't")
+		timeoutOccurred := strings.Contains(s, "context deadline exceeded")
+		if timeoutOccurred != wantTimeout {
+			t.Errorf("Unexpected timeout state: got %v, want %v", timeoutOccurred, wantTimeout)
 		}
 	}()
 
