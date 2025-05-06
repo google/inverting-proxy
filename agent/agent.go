@@ -62,6 +62,7 @@ const (
 var (
 	proxy                     = flag.String("proxy", "", "URL (including scheme) of the inverting proxy")
 	proxyTimeout              = flag.Duration("proxy-timeout", 60*time.Second, "Client timeout when sending requests to the inverting proxy")
+	listRequestsTimeout       = flag.Duration("list-requests-timeout", 0*time.Second, "Client timeout for listing requests from the inverting proxy. Defaults to proxy-timeout value")
 	host                      = flag.String("host", "localhost:8080", "Hostname (including port) of the backend server")
 	forceHTTP2                = flag.Bool("force-http2", false, "Force connections to the backend host to be performed using HTTP/2")
 	backendID                 = flag.String("backend", "", "Unique ID for this backend.")
@@ -205,6 +206,12 @@ func processOneRequest(client *http.Client, hostProxy http.Handler, backendID st
 func pollForNewRequests(pollingCtx context.Context, client *http.Client, hostProxy http.Handler, backendID string) {
 	previouslySeenRequests := lru.New(requestCacheLimit)
 
+	// If listRequestsTimeout is set and is less than proxyTimeout, use it. Otherwise, use proxyTimeout.
+	listRequestsTimeoutToUse := *proxyTimeout
+	if *listRequestsTimeout > 0 && *listRequestsTimeout < *proxyTimeout {
+		listRequestsTimeoutToUse = *listRequestsTimeout
+	}
+
 	var retryCount uint
 	for {
 		select {
@@ -212,7 +219,9 @@ func pollForNewRequests(pollingCtx context.Context, client *http.Client, hostPro
 			log.Printf("Request polling context completed with ctx err: %v\n", pollingCtx.Err())
 			return
 		default:
-			if requests, err := utils.ListPendingRequests(client, *proxy, backendID, metricHandler); err != nil {
+			listRequestsCtx, cancel := context.WithTimeout(pollingCtx, listRequestsTimeoutToUse)
+			defer cancel()
+			if requests, err := utils.ListPendingRequests(listRequestsCtx, client, *proxy, backendID, metricHandler); err != nil {
 				log.Printf("Failed to read pending requests: %q\n", err.Error())
 				time.Sleep(utils.ExponentialBackoffDuration(retryCount))
 				retryCount++
