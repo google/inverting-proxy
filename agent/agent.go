@@ -61,8 +61,8 @@ const (
 
 var (
 	proxy                     = flag.String("proxy", "", "URL (including scheme) of the inverting proxy")
-	proxyTimeout              = flag.Duration("proxy-timeout", 60*time.Second, "Client timeout when sending requests to the inverting proxy")
-	listRequestsTimeout       = flag.Duration("list-requests-timeout", 0*time.Second, "Client timeout for listing requests from the inverting proxy. Defaults to proxy-timeout value")
+	proxyTimeout              = flag.Duration("proxy-timeout", 60*time.Second, "Timeout for polling the inverting proxy for new requests")
+	requestForwardingTimeout  = flag.Duration("request-forwarding-timeout", 0*time.Second, "Timeout for forwarding individual requests to the backend and returning a response (default same as proxy-timeout)")
 	host                      = flag.String("host", "localhost:8080", "Hostname (including port) of the backend server")
 	forceHTTP2                = flag.Bool("force-http2", false, "Force connections to the backend host to be performed using HTTP/2")
 	backendID                 = flag.String("backend", "", "Unique ID for this backend.")
@@ -206,12 +206,6 @@ func processOneRequest(client *http.Client, hostProxy http.Handler, backendID st
 func pollForNewRequests(pollingCtx context.Context, client *http.Client, hostProxy http.Handler, backendID string) {
 	previouslySeenRequests := lru.New(requestCacheLimit)
 
-	// If listRequestsTimeout is set and is less than proxyTimeout, use it. Otherwise, use proxyTimeout.
-	listRequestsTimeoutToUse := *proxyTimeout
-	if *listRequestsTimeout > 0 && *listRequestsTimeout < *proxyTimeout {
-		listRequestsTimeoutToUse = *listRequestsTimeout
-	}
-
 	var retryCount uint
 	for {
 		select {
@@ -219,7 +213,7 @@ func pollForNewRequests(pollingCtx context.Context, client *http.Client, hostPro
 			log.Printf("Request polling context completed with ctx err: %v\n", pollingCtx.Err())
 			return
 		default:
-			listRequestsCtx, cancel := context.WithTimeout(pollingCtx, listRequestsTimeoutToUse)
+			listRequestsCtx, cancel := context.WithTimeout(pollingCtx, *proxyTimeout)
 			defer cancel()
 			if requests, err := utils.ListPendingRequests(listRequestsCtx, client, *proxy, backendID, metricHandler); err != nil {
 				log.Printf("Failed to read pending requests: %q\n", err.Error())
@@ -313,7 +307,16 @@ func runAdapter(ctx context.Context, requestPollingCtx context.Context) error {
 	if err != nil {
 		return err
 	}
-	client.Timeout = *proxyTimeout
+
+	// If requestForwardingTimeout is set and is larger than proxyTimeout, use it. Otherwise, use proxyTimeout.
+	requestForwardingTimeoutToUse := *proxyTimeout
+	if requestForwardingTimeoutToUse > 0 && *requestForwardingTimeout > *proxyTimeout {
+		requestForwardingTimeoutToUse = *requestForwardingTimeout
+	}
+
+	client.Timeout = requestForwardingTimeoutToUse
+
+	log.Printf("Request forwarding timeout is %v; proxy timeout is %v\n", requestForwardingTimeoutToUse, *proxyTimeout)
 
 	hostProxy, err := hostProxy(ctx, *host, *shimPath, *shimWebsockets, *forceHTTP2)
 	if err != nil {
