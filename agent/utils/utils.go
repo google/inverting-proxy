@@ -230,9 +230,9 @@ func RoundTripperWithVMIdentity(ctx context.Context, wrapped http.RoundTripper, 
 }
 
 // ListPendingRequests issues a single request to the proxy to ask for the IDs of pending requests.
-func ListPendingRequests(client *http.Client, proxyHost, backendID string, metricHandler *metrics.MetricHandler) ([]string, error) {
+func ListPendingRequests(ctx context.Context, client *http.Client, proxyHost, backendID string, metricHandler *metrics.MetricHandler) ([]string, error) {
 	proxyURL := proxyHost + PendingPath
-	proxyReq, err := http.NewRequest(http.MethodGet, proxyURL, nil)
+	proxyReq, err := http.NewRequestWithContext(ctx, http.MethodGet, proxyURL, nil)
 	if err != nil {
 		return nil, err
 	}
