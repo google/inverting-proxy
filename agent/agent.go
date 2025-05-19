@@ -213,8 +213,12 @@ func pollForNewRequests(pollingCtx context.Context, client *http.Client, hostPro
 			log.Printf("Request polling context completed with ctx err: %v\n", pollingCtx.Err())
 			return
 		default:
-			listRequestsCtx, cancel := context.WithTimeout(pollingCtx, *proxyTimeout)
-			defer cancel()
+			listRequestsCtx := pollingCtx
+			var cancel context.CancelFunc
+			if *proxyTimeout > 0 {
+				listRequestsCtx, cancel = context.WithTimeout(pollingCtx, *proxyTimeout)
+				defer cancel()
+			}
 			if requests, err := utils.ListPendingRequests(listRequestsCtx, client, *proxy, backendID, metricHandler); err != nil {
 				log.Printf("Failed to read pending requests: %q\n", err.Error())
 				time.Sleep(utils.ExponentialBackoffDuration(retryCount))
