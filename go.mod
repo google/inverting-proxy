@@ -1,9 +1,9 @@
 module github.com/google/inverting-proxy
 
-go 1.18
+go 1.23.0
 
 require (
-	cloud.google.com/go/compute/metadata v0.2.3
+	cloud.google.com/go/compute/metadata v0.3.0
 	cloud.google.com/go/monitoring v1.13.0
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da
 	github.com/golang/protobuf v1.5.3
@@ -12,7 +12,7 @@ require (
 	github.com/googleapis/gax-go/v2 v2.7.1
 	github.com/gorilla/websocket v1.5.0
 	golang.org/x/net v0.38.0
-	golang.org/x/oauth2 v0.7.0
+	golang.org/x/oauth2 v0.27.0
 	google.golang.org/api v0.114.0
 	google.golang.org/appengine/v2 v2.0.2
 	google.golang.org/genproto v0.0.0-20230526161137-0005af68ea54
@@ -22,7 +22,6 @@ require (
 )
 
 require (
-	cloud.google.com/go/compute v1.19.1 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.2.3 // indirect
 	go.opencensus.io v0.24.0 // indirect
 	golang.org/x/sys v0.31.0 // indirect
