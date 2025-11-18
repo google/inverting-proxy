@@ -372,7 +372,7 @@ func postResponseWithRetries(client *http.Client, proxyURL, backendID, requestID
 			continue
 		}
 		// Force the response body to be fully read by copying it to the discard target.
-  		//
+		//
 		// The response is expected to be empty for this specific case, so reading the entire
 		// response body should be safe and not cause any delays.
 		//
@@ -399,7 +399,7 @@ func postResponseWithRetries(client *http.Client, proxyURL, backendID, requestID
 				return err
 			}
 			continue
-		}	
+		}
 		return nil
 	}
 	return err
