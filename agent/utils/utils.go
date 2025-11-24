@@ -371,6 +371,28 @@ func postResponseWithRetries(client *http.Client, proxyURL, backendID, requestID
 			}
 			continue
 		}
+		// Force the response body to be fully read by copying it to the discard target.
+		//
+		// The response is expected to be empty for this specific case, so reading the entire
+		// response body should be safe and not cause any delays.
+		//
+		// The reason we do this is because under certain conditions (in particular, when
+		// using HTTP/2) the server and client might both try to close the underlying stream
+		// at the same time. When that happens, the client sends a PING message at the
+		// same time it sends the `RST_STREAM` message.
+		//
+		// If this happens a lot, it can trigger protections that a lot of server deployments
+		// have against PING flood attacks.
+		//
+		// Draining the response body forces the server-side `END_STREAM` message to
+		// arrive before the client tries to send the `RST_STREAM` message. In that case,
+		// the client will not send a PING and so will not trigger these PING flood protections.
+		//
+		// A future version of the Go standard library will likely change the client behavior
+		// so that it is more conservative about sending these PING messages, and if
+		// that happens then this line can be removed. The proposed change for that
+		// is https://go-review.git.corp.google.com/c/net/+/720300
+		io.Copy(io.Discard, proxyResp.Body)
 		proxyResp.Body.Close()
 		if 500 <= proxyResp.StatusCode && proxyResp.StatusCode < 600 {
 			if _, seekErr := proxyReadSeeker.Seek(0, io.SeekStart); seekErr != nil {
