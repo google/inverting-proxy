@@ -17,7 +17,16 @@ limitations under the License.
 package websockets
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"path"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
