@@ -233,7 +233,7 @@ func TestShimHandlers(t *testing.T) {
 	openWrapper := func(h http.Handler, metricHandler *metrics.MetricHandler) http.Handler {
 		return h
 	}
-	p, err := Proxy(t.Context(), h, serverURL.Host, testShimPath, false, false, openWrapper, nil)
+	p, err := Proxy(context.Background(), h, serverURL.Host, testShimPath, false, false, openWrapper, nil)
 	if err != nil {
 		t.Fatalf("Failure creating the websocket shim proxy: %+v", err)
 	}
