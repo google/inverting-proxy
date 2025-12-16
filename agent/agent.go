@@ -29,6 +29,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	_ "expvar"
 	"flag"
 	"fmt"
 	"log"
@@ -36,6 +37,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httputil"
+	_ "net/http/pprof"
 	"net/url"
 	"strings"
 	"time"
@@ -49,6 +51,7 @@ import (
 	"github.com/google/inverting-proxy/agent/banner"
 	"github.com/google/inverting-proxy/agent/metrics"
 	"github.com/google/inverting-proxy/agent/sessions"
+	"github.com/google/inverting-proxy/agent/stats"
 	"github.com/google/inverting-proxy/agent/utils"
 	"github.com/google/inverting-proxy/agent/websockets"
 )
@@ -87,6 +90,7 @@ var (
 	sessionCookieCacheLimit = flag.Int("session-cookie-cache-limit", 1000, "Upper bound on the number of concurrent sessions that can be tracked by the agent")
 	rewriteWebsocketHost    = flag.Bool("rewrite-websocket-host", false, "Whether to rewrite the Host header to the original request when shimming a websocket connection")
 	stripCredentials        = flag.Bool("strip-credentials", false, "Whether to strip the Authorization header from all requests.")
+	statsAddr               = flag.String("stats-addr", "", "If non-empty, address to serve HTTP stats on")
 
 	projectID                = flag.String("monitoring-project-id", "", "Name of the GCP project id")
 	metricDomain             = flag.String("metric-domain", "", "Domain under which to write metrics eg. notebooks.googleapis.com")
@@ -162,9 +166,12 @@ func forwardRequest(client *http.Client, hostProxy http.Handler, request *utils.
 		return fmt.Errorf("failed to create the response forwarder: %v", err)
 	}
 	hostProxy.ServeHTTP(responseForwarder, httpRequest)
+	latency := time.Since(request.StartTime)
 	if *debug {
-		log.Printf("Backend latency for request %s: %s\n", request.RequestID, time.Since(request.StartTime).String())
+		log.Printf("Backend latency for request %s: %s\n", request.RequestID, latency.String())
 	}
+	// Always record for expvar metrics
+	metrics.RecordResponseTime(latency)
 	if err := responseForwarder.Close(); err != nil {
 		return fmt.Errorf("failed to close the response forwarder: %v", err)
 	}
@@ -326,6 +333,11 @@ func main() {
 	flag.Parse()
 	ctx := context.Background()
 
+	if *statsAddr != "" {
+		log.Printf("Starting HTTP stats server")
+		go stats.Start(*statsAddr)
+	}
+
 	if *proxy == "" {
 		log.Fatal("You must specify the address of the proxy")
 	}
@@ -342,6 +354,11 @@ func main() {
 	metricHandler = mh
 	if err != nil {
 		log.Printf("Unable to create metric handler: %v", err)
+	}
+
+	// Start expvar metrics update goroutine only if cloud monitoring is disabled
+	if metricHandler == nil {
+		metrics.StartExpvarMetrics()
 	}
 
 	waitForHealthy()

@@ -270,9 +270,9 @@ func getRequestWithRetries(client *http.Client, proxyURL, backendID, requestID s
 func parseRequestFromProxyResponse(backendID, requestID string, proxyResp *http.Response, metricHandler *metrics.MetricHandler) (*ForwardedRequest, error) {
 	user := proxyResp.Header.Get(HeaderUserID)
 	startTimeStr := proxyResp.Header.Get(HeaderRequestStartTime)
+	go metricHandler.WriteResponseCodeMetric(proxyResp.StatusCode)
 
 	if proxyResp.StatusCode != http.StatusOK {
-		metricHandler.WriteResponseCodeMetric(proxyResp.StatusCode)
 		return nil, fmt.Errorf("Error status while reading %q from the proxy", requestID)
 	}
 
@@ -620,9 +620,7 @@ func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID s
 			}
 			statusCode = resp.StatusCode
 		}
-		if metricHandler != nil {
-			go metricHandler.WriteResponseCodeMetric(statusCode)
-		}
+		go metricHandler.WriteResponseCodeMetric(statusCode)
 	}()
 	return &responseForwarder{rw, postErrChan, writeErrChan}, nil
 }

@@ -15,8 +15,10 @@ package metrics
 
 import (
 	"context"
+	"expvar"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -41,7 +43,40 @@ var (
 	}
 )
 
-var codeCount map[string]int64
+var (
+	codeCount          map[string]int64
+	responseCodes      = expvar.NewMap("response_codes")
+	p50ResponseTime    = new(expvar.Float)
+	p90ResponseTime    = new(expvar.Float)
+	p99ResponseTime    = new(expvar.Float)
+	responseTimesVar   = new(expvar.Map)
+	latencies          []time.Duration
+	latenciesMutex     sync.Mutex
+	percentilesToCalc  = []float64{50.0, 90.0, 99.0}
+	percentileToExpvar = map[float64]*expvar.Float{
+		50.0: p50ResponseTime,
+		90.0: p90ResponseTime,
+		99.0: p99ResponseTime,
+	}
+)
+
+func init() {
+	responseTimesVar.Set("p50", p50ResponseTime)
+	responseTimesVar.Set("p90", p90ResponseTime)
+	responseTimesVar.Set("p99", p99ResponseTime)
+	expvar.Publish("response_times", responseTimesVar)
+}
+
+// StartExpvarMetrics starts a goroutine that periodically updates expvar metrics
+func StartExpvarMetrics() {
+	go func() {
+		ticker := time.NewTicker(samplePeriod)
+		defer ticker.Stop()
+		for range ticker.C {
+			updateExpvarPercentiles()
+		}
+	}()
+}
 
 // metricClient is a client for interacting with Cloud Monitoring API.
 type metricClient interface {
@@ -89,10 +124,7 @@ func NewMetricHandler(ctx context.Context, projectID, resourceType, resourceKeyV
 			case <-handler.ctx.Done():
 				return
 			case <-ticker.C:
-				handler.emitResponseCodeMetric()
-				handler.mu.Lock()
-				codeCount = make(map[string]int64)
-				handler.mu.Unlock()
+				handler.emitMetrics()
 			}
 		}
 	}()
@@ -127,15 +159,17 @@ func newMetricHandlerHelper(ctx context.Context, projectID, resourceType, resour
 	}
 
 	codeCount = make(map[string]int64)
+	latencies = make([]time.Duration, 0)
 
 	return &MetricHandler{
-		projectID:      projectID,
-		metricDomain:   metricDomain,
-		resourceType:   resourceType,
-		resourceLabels: resourceLabels,
-		ctx:            ctx,
-		client:         client,
-	}, nil
+			projectID:      projectID,
+			metricDomain:   metricDomain,
+			resourceType:   resourceType,
+			resourceLabels: resourceLabels,
+			ctx:            ctx,
+			client:         client,
+		},
+		nil
 }
 
 func parseGCEResourceLabels(resourceKeyValues string) (*map[string]string, error) {
@@ -189,17 +223,42 @@ func (h *MetricHandler) GetResponseCountMetricType() string {
 
 // WriteResponseCodeMetric will record observed response codes and emitResponseCodeMetric writes to cloud monarch
 func (h *MetricHandler) WriteResponseCodeMetric(statusCode int) error {
+	responseCode := fmt.Sprintf("%v", statusCode)
+	// Publish the response code count to expvar
+	responseCodes.Add(responseCode, 1)
+
 	if h == nil {
 		return nil
 	}
-	responseCode := fmt.Sprintf("%v", statusCode)
-
 	// Update response code count for the current sample period
 	h.mu.Lock()
 	codeCount[responseCode]++
 	h.mu.Unlock()
 
 	return nil
+}
+
+// RecordResponseTime records observed response times for expvar metrics
+func RecordResponseTime(latency time.Duration) {
+	latenciesMutex.Lock()
+	latencies = append(latencies, latency)
+	latenciesMutex.Unlock()
+}
+
+// WriteResponseTime will record observed response times
+func (h *MetricHandler) WriteResponseTime(latency time.Duration) {
+	RecordResponseTime(latency)
+}
+
+func (h *MetricHandler) emitMetrics() {
+	h.emitResponseCodeMetric()
+	h.emitResponseTimeMetric()
+	h.mu.Lock()
+	codeCount = make(map[string]int64)
+	h.mu.Unlock()
+	latenciesMutex.Lock()
+	latencies = make([]time.Duration, 0)
+	latenciesMutex.Unlock()
 }
 
 // emitResponseCodeMetric emits observed response codes to cloud monarch once sample period is over
@@ -223,6 +282,79 @@ func (h *MetricHandler) emitResponseCodeMetric() {
 			log.Println("Failed to write time series data: ", err)
 		}
 	}
+}
+
+// updateExpvarPercentiles calculates and updates expvar percentiles from recorded latencies
+func updateExpvarPercentiles() {
+	latenciesMutex.Lock()
+	defer latenciesMutex.Unlock()
+	if len(latencies) == 0 {
+		return
+	}
+	// Make a copy and sort it
+	latenciesCopy := make([]time.Duration, len(latencies))
+	copy(latenciesCopy, latencies)
+	sort.Slice(latenciesCopy, func(i, j int) bool {
+		return latenciesCopy[i] < latenciesCopy[j]
+	})
+	for _, p := range percentilesToCalc {
+		percentileValue := calculatePercentile(p, latenciesCopy)
+		expvar, ok := percentileToExpvar[p]
+		if !ok {
+			log.Printf("Unknown percentile value: %v", p)
+			continue
+		}
+		expvar.Set(percentileValue)
+	}
+	// Clear latencies after updating percentiles
+	latencies = make([]time.Duration, 0)
+}
+
+func (h *MetricHandler) emitResponseTimeMetric() {
+	updateExpvarPercentiles()
+}
+
+func calculatePercentile(p float64, d []time.Duration) float64 {
+	if len(d) == 0 {
+		return 0.0
+	}
+	index := (p / 100.0) * float64(len(d)-1)
+	lower := int(index)
+	upper := lower + 1
+	if upper >= len(d) {
+		return float64(d[lower].Milliseconds())
+	}
+	weight := index - float64(lower)
+	return float64(d[lower].Milliseconds())*(1-weight) + float64(d[upper].Milliseconds())*weight
+}
+
+// GetCurrentPercentiles calculates and returns the current percentiles from recorded latencies
+func GetCurrentPercentiles() map[string]float64 {
+	latenciesMutex.Lock()
+	defer latenciesMutex.Unlock()
+
+	result := map[string]float64{
+		"p50": 0.0,
+		"p90": 0.0,
+		"p99": 0.0,
+	}
+
+	if len(latencies) == 0 {
+		return result
+	}
+
+	// Make a copy and sort it
+	latenciesCopy := make([]time.Duration, len(latencies))
+	copy(latenciesCopy, latencies)
+	sort.Slice(latenciesCopy, func(i, j int) bool {
+		return latenciesCopy[i] < latenciesCopy[j]
+	})
+
+	result["p50"] = calculatePercentile(50.0, latenciesCopy)
+	result["p90"] = calculatePercentile(90.0, latenciesCopy)
+	result["p99"] = calculatePercentile(99.0, latenciesCopy)
+
+	return result
 }
 
 // newTimeSeries creates and returns a new time series
