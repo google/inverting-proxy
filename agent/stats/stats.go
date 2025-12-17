@@ -144,11 +144,12 @@ func serveStats(w http.ResponseWriter, _ *http.Request, backendID, proxyURL stri
 
 // Start a server on the given address that will respond to any request with a stats page.
 func Start(address, backendID, proxyURL string) {
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/stats", func(w http.ResponseWriter, r *http.Request) {
 		serveStats(w, r, backendID, proxyURL)
 	})
 	log.Printf("Stats server listening on %s", address)
-	if err := http.ListenAndServe(address, nil); err != nil {
+	if err := http.ListenAndServe(address, mux); err != nil {
 		log.Fatalf("Stats server failed: %v", err)
 	}
 }

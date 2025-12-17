@@ -162,14 +162,13 @@ func newMetricHandlerHelper(ctx context.Context, projectID, resourceType, resour
 	latencies = make([]time.Duration, 0)
 
 	return &MetricHandler{
-			projectID:      projectID,
-			metricDomain:   metricDomain,
-			resourceType:   resourceType,
-			resourceLabels: resourceLabels,
-			ctx:            ctx,
-			client:         client,
-		},
-		nil
+		projectID:      projectID,
+		metricDomain:   metricDomain,
+		resourceType:   resourceType,
+		resourceLabels: resourceLabels,
+		ctx:            ctx,
+		client:         client,
+	}, nil
 }
 
 func parseGCEResourceLabels(resourceKeyValues string) (*map[string]string, error) {
@@ -221,15 +220,19 @@ func (h *MetricHandler) GetResponseCountMetricType() string {
 	return fmt.Sprintf("%s/instance/proxy_agent/response_count", h.metricDomain)
 }
 
+// RecordResponseCode records a response code to expvar (always works, even without cloud monitoring)
+func RecordResponseCode(statusCode int) {
+	responseCode := fmt.Sprintf("%v", statusCode)
+	responseCodes.Add(responseCode, 1)
+}
+
 // WriteResponseCodeMetric will record observed response codes and emitResponseCodeMetric writes to cloud monarch
 func (h *MetricHandler) WriteResponseCodeMetric(statusCode int) error {
-	responseCode := fmt.Sprintf("%v", statusCode)
-	// Publish the response code count to expvar
-	responseCodes.Add(responseCode, 1)
-
 	if h == nil {
 		return nil
 	}
+
+	responseCode := fmt.Sprintf("%v", statusCode)
 	// Update response code count for the current sample period
 	h.mu.Lock()
 	codeCount[responseCode]++
@@ -315,8 +318,6 @@ func updateExpvarPercentiles() {
 		}
 		expvar.Set(percentileValue)
 	}
-	// Clear latencies after updating percentiles
-	latencies = latencies[:0]
 }
 
 func (h *MetricHandler) emitResponseTimeMetric() {

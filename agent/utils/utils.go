@@ -239,7 +239,7 @@ func ListPendingRequests(ctx context.Context, client *http.Client, proxyHost, ba
 	proxyReq.Header.Add(HeaderBackendID, backendID)
 	proxyResp, err := client.Do(proxyReq)
 	if err != nil {
-		return nil, fmt.Errorf("A proxy request failed: %q", err.Error())
+		return nil, fmt.Errorf("a proxy request failed: %q", err.Error())
 	}
 	defer proxyResp.Body.Close()
 	return parseRequestIDs(proxyResp, metricHandler)
@@ -270,10 +270,15 @@ func getRequestWithRetries(client *http.Client, proxyURL, backendID, requestID s
 func parseRequestFromProxyResponse(backendID, requestID string, proxyResp *http.Response, metricHandler *metrics.MetricHandler) (*ForwardedRequest, error) {
 	user := proxyResp.Header.Get(HeaderUserID)
 	startTimeStr := proxyResp.Header.Get(HeaderRequestStartTime)
-	go metricHandler.WriteResponseCodeMetric(proxyResp.StatusCode)
+	// Always record to expvar for stats page
+	go metrics.RecordResponseCode(proxyResp.StatusCode)
+	// Also record to cloud monitoring if enabled
+	if metricHandler != nil {
+		go metricHandler.WriteResponseCodeMetric(proxyResp.StatusCode)
+	}
 
 	if proxyResp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Error status while reading %q from the proxy", requestID)
+		return nil, fmt.Errorf("error status while reading %q from the proxy", requestID)
 	}
 
 	startTime, err := time.Parse(time.RFC3339Nano, startTimeStr)
@@ -301,7 +306,7 @@ func ReadRequest(client *http.Client, proxyHost, backendID, requestID string, ca
 	proxyURL := proxyHost + RequestPath
 	proxyResp, err := getRequestWithRetries(client, proxyURL, backendID, requestID)
 	if err != nil {
-		return fmt.Errorf("A proxy request failed: %q", err.Error())
+		return fmt.Errorf("a proxy request failed: %q", err.Error())
 	}
 	defer proxyResp.Body.Close()
 
@@ -620,6 +625,9 @@ func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID s
 			}
 			statusCode = resp.StatusCode
 		}
+		// Always record to expvar for stats page
+		go metrics.RecordResponseCode(statusCode)
+		// Also record to cloud monitoring if enabled
 		if metricHandler != nil {
 			go metricHandler.WriteResponseCodeMetric(statusCode)
 		}
