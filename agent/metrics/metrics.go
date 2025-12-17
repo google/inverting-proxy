@@ -257,14 +257,23 @@ func (h *MetricHandler) emitMetrics() {
 	codeCount = make(map[string]int64)
 	h.mu.Unlock()
 	latenciesMutex.Lock()
-	latencies = make([]time.Duration, 0)
+	latencies = latencies[:0]
 	latenciesMutex.Unlock()
 }
 
 // emitResponseCodeMetric emits observed response codes to cloud monarch once sample period is over
 func (h *MetricHandler) emitResponseCodeMetric() {
 	log.Printf("WriteResponseCodeMetric|attempting to write metrics at time: %v\n", time.Now())
-	for responseCode, count := range codeCount {
+
+	// Copy codeCount while holding the lock to avoid race conditions
+	h.mu.Lock()
+	counts := make(map[string]int64, len(codeCount))
+	for k, v := range codeCount {
+		counts[k] = v
+	}
+	h.mu.Unlock()
+
+	for responseCode, count := range counts {
 		responseClass := fmt.Sprintf("%sXX", responseCode[0:1])
 		metricLabels := map[string]string{
 			"response_code":       responseCode,
@@ -307,7 +316,7 @@ func updateExpvarPercentiles() {
 		expvar.Set(percentileValue)
 	}
 	// Clear latencies after updating percentiles
-	latencies = make([]time.Duration, 0)
+	latencies = latencies[:0]
 }
 
 func (h *MetricHandler) emitResponseTimeMetric() {

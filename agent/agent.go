@@ -340,7 +340,6 @@ func main() {
 		log.Fatal("You must specify a backend ID")
 	}
 	if *statsAddr != "" {
-		log.Printf("Starting HTTP stats server at: %s", *statsAddr)
 		go stats.Start(*statsAddr, *backendID, *proxy)
 	}
 	if !strings.HasPrefix(*healthCheckPath, "/") {

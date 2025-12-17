@@ -2,11 +2,9 @@ package stats
 
 import (
 	"expvar"
-	"fmt"
 	"html/template"
+	"log"
 	"net/http"
-
-	"github.com/google/inverting-proxy/agent/metrics"
 )
 
 const statsPage = `
@@ -86,24 +84,34 @@ type statsData struct {
 	ResponseTimes map[string]string
 }
 
-func formatFloat(f float64) string {
-	return fmt.Sprintf("%.2f", f)
+var (
+	statsTemplate *template.Template
+)
+
+func init() {
+	var err error
+	statsTemplate, err = template.New("stats").Parse(statsPage)
+	if err != nil {
+		log.Fatalf("Failed to parse stats template: %v", err)
+	}
 }
 
 func serveStats(w http.ResponseWriter, _ *http.Request, backendID, proxyURL string) {
-	responseCodesVar := expvar.Get("response_codes").(*expvar.Map)
-
 	var responseCodes []responseCode
-	responseCodesVar.Do(func(kv expvar.KeyValue) {
-		responseCodes = append(responseCodes, responseCode{Code: kv.Key, Count: kv.Value.String()})
-	})
+	if v := expvar.Get("response_codes"); v != nil {
+		if responseCodesVar, ok := v.(*expvar.Map); ok {
+			responseCodesVar.Do(func(kv expvar.KeyValue) {
+				responseCodes = append(responseCodes, responseCode{Code: kv.Key, Count: kv.Value.String()})
+			})
+		}
+	}
 
-	// Get current percentiles on-demand
-	percentiles := metrics.GetCurrentPercentiles()
+	// Get percentiles from expvar (these persist across sample periods)
+	responseTimesVar := expvar.Get("response_times").(*expvar.Map)
 	responseTimes := make(map[string]string)
-	responseTimes["p50"] = formatFloat(percentiles["p50"])
-	responseTimes["p90"] = formatFloat(percentiles["p90"])
-	responseTimes["p99"] = formatFloat(percentiles["p99"])
+	responseTimesVar.Do(func(kv expvar.KeyValue) {
+		responseTimes[kv.Key] = kv.Value.String()
+	})
 
 	data := statsData{
 		BackendID:     backendID,
@@ -112,12 +120,7 @@ func serveStats(w http.ResponseWriter, _ *http.Request, backendID, proxyURL stri
 		ResponseTimes: responseTimes,
 	}
 
-	tmpl, err := template.New("stats").Parse(statsPage)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if err := tmpl.Execute(w, data); err != nil {
+	if err := statsTemplate.Execute(w, data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -127,5 +130,8 @@ func Start(address, backendID, proxyURL string) {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		serveStats(w, r, backendID, proxyURL)
 	})
-	http.ListenAndServe(address, nil)
+	log.Printf("Stats server listening on %s", address)
+	if err := http.ListenAndServe(address, nil); err != nil {
+		log.Fatalf("Stats server failed: %v", err)
+	}
 }
