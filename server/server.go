@@ -220,6 +220,11 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.Lock()
 	p.requests[id] = pending
 	p.Unlock()
+	defer func(){
+		p.Lock()
+		delete(p.requests, id)
+		p.Unlock()
+	}()
 
 	// Enqueue the request
 	select {
