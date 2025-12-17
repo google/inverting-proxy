@@ -322,10 +322,12 @@ func calculatePercentile(p float64, d []time.Duration) float64 {
 	lower := int(index)
 	upper := lower + 1
 	if upper >= len(d) {
-		return float64(d[lower].Milliseconds())
+		return float64(d[lower].Nanoseconds()) / 1e6
 	}
 	weight := index - float64(lower)
-	return float64(d[lower].Milliseconds())*(1-weight) + float64(d[upper].Milliseconds())*weight
+	lowerVal := float64(d[lower].Nanoseconds()) / 1e6
+	upperVal := float64(d[upper].Nanoseconds()) / 1e6
+	return lowerVal*(1-weight) + upperVal*weight
 }
 
 // GetCurrentPercentiles calculates and returns the current percentiles from recorded latencies

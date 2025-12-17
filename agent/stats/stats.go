@@ -34,6 +34,9 @@ const statsPage = `
 <body>
 	<h1>Inverting Proxy Agent Stats</h1>
 
+	<p><b>Backend ID:</b> {{.BackendID}}</p>
+	<p><b>Proxy URL:</b> {{.ProxyURL}}</p>
+
 	<h2>Response Codes</h2>
 	<table>
 		<tr>
@@ -77,6 +80,8 @@ type responseCode struct {
 }
 
 type statsData struct {
+	BackendID     string
+	ProxyURL      string
 	ResponseCodes []responseCode
 	ResponseTimes map[string]string
 }
@@ -85,7 +90,7 @@ func formatFloat(f float64) string {
 	return fmt.Sprintf("%.2f", f)
 }
 
-func serveStats(w http.ResponseWriter, r *http.Request) {
+func serveStats(w http.ResponseWriter, _ *http.Request, backendID, proxyURL string) {
 	responseCodesVar := expvar.Get("response_codes").(*expvar.Map)
 
 	var responseCodes []responseCode
@@ -101,6 +106,8 @@ func serveStats(w http.ResponseWriter, r *http.Request) {
 	responseTimes["p99"] = formatFloat(percentiles["p99"])
 
 	data := statsData{
+		BackendID:     backendID,
+		ProxyURL:      proxyURL,
 		ResponseCodes: responseCodes,
 		ResponseTimes: responseTimes,
 	}
@@ -116,7 +123,9 @@ func serveStats(w http.ResponseWriter, r *http.Request) {
 }
 
 // Start a server on the given address that will respond to any request with a stats page.
-func Start(address string) {
-	http.HandleFunc("/", serveStats)
+func Start(address, backendID, proxyURL string) {
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		serveStats(w, r, backendID, proxyURL)
+	})
 	http.ListenAndServe(address, nil)
 }

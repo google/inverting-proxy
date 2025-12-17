@@ -90,7 +90,7 @@ var (
 	sessionCookieCacheLimit = flag.Int("session-cookie-cache-limit", 1000, "Upper bound on the number of concurrent sessions that can be tracked by the agent")
 	rewriteWebsocketHost    = flag.Bool("rewrite-websocket-host", false, "Whether to rewrite the Host header to the original request when shimming a websocket connection")
 	stripCredentials        = flag.Bool("strip-credentials", false, "Whether to strip the Authorization header from all requests.")
-	statsAddr               = flag.String("stats-addr", "", "If non-empty, address to serve HTTP stats on")
+	statsAddr               = flag.String("stats-addr", "", "If non-empty, address to serve HTTP page stats on")
 
 	projectID                = flag.String("monitoring-project-id", "", "Name of the GCP project id")
 	metricDomain             = flag.String("metric-domain", "", "Domain under which to write metrics eg. notebooks.googleapis.com")
@@ -333,16 +333,15 @@ func main() {
 	flag.Parse()
 	ctx := context.Background()
 
-	if *statsAddr != "" {
-		log.Printf("Starting HTTP stats server")
-		go stats.Start(*statsAddr)
-	}
-
 	if *proxy == "" {
 		log.Fatal("You must specify the address of the proxy")
 	}
 	if *backendID == "" {
 		log.Fatal("You must specify a backend ID")
+	}
+	if *statsAddr != "" {
+		log.Printf("Starting HTTP stats server at: %s", *statsAddr)
+		go stats.Start(*statsAddr, *backendID, *proxy)
 	}
 	if !strings.HasPrefix(*healthCheckPath, "/") {
 		*healthCheckPath = "/" + *healthCheckPath
