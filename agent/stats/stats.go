@@ -2,9 +2,13 @@ package stats
 
 import (
 	"expvar"
+	"fmt"
 	"html/template"
 	"log"
 	"net/http"
+	"strconv"
+
+	"github.com/google/inverting-proxy/agent/metrics"
 )
 
 const statsPage = `
@@ -106,12 +110,25 @@ func serveStats(w http.ResponseWriter, _ *http.Request, backendID, proxyURL stri
 		}
 	}
 
-	// Get percentiles from expvar (these persist across sample periods)
-	responseTimesVar := expvar.Get("response_times").(*expvar.Map)
+	// Get current percentiles (real-time), fallback to expvar if no recent data
+	currentPercentiles := metrics.GetCurrentPercentiles()
 	responseTimes := make(map[string]string)
-	responseTimesVar.Do(func(kv expvar.KeyValue) {
-		responseTimes[kv.Key] = kv.Value.String()
-	})
+	for key, value := range currentPercentiles {
+		if value > 0 {
+			responseTimes[key] = fmt.Sprintf("%.4f", value)
+		} else if responseTimesVar := expvar.Get("response_times"); responseTimesVar != nil {
+			if rtMap, ok := responseTimesVar.(*expvar.Map); ok {
+				if expvarVal := rtMap.Get(key); expvarVal != nil {
+					if f, err := strconv.ParseFloat(expvarVal.String(), 64); err == nil {
+						responseTimes[key] = fmt.Sprintf("%.4f", f)
+					}
+				}
+			}
+		}
+		if responseTimes[key] == "" {
+			responseTimes[key] = "0.0000"
+		}
+	}
 
 	data := statsData{
 		BackendID:     backendID,

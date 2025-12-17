@@ -620,7 +620,9 @@ func NewResponseForwarder(client *http.Client, proxyHost, backendID, requestID s
 			}
 			statusCode = resp.StatusCode
 		}
-		go metricHandler.WriteResponseCodeMetric(statusCode)
+		if metricHandler != nil {
+			go metricHandler.WriteResponseCodeMetric(statusCode)
+		}
 	}()
 	return &responseForwarder{rw, postErrChan, writeErrChan}, nil
 }
