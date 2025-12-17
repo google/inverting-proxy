@@ -295,10 +295,36 @@ type sessionMessage struct {
 	Subprotocol string      `json:"s,omitempty"`
 }
 
+type connectionErrorHandler struct {
+	mu            sync.Mutex
+	firstError    error
+	reportedError bool
+}
+
+func (c *connectionErrorHandler) Error() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.firstError
+}
+
+func (c *connectionErrorHandler) ReportError(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.reportedError {
+		return
+	}
+	c.reportedError = true
+	c.firstError = err
+	if err != nil {
+		log.Printf("Websocket failure: %v", err)
+	}
+}
+
 func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost bool, openWebsocketWrapper func(http.Handler, *metrics.MetricHandler) http.Handler, enableWebsocketInjection bool, metricHandler *metrics.MetricHandler) http.Handler {
 	var connections sync.Map
 	var sessionCount uint64
 	mux := http.NewServeMux()
+	errorHandler := &connectionErrorHandler{}
 	openWebsocketHandler := openWebsocketWrapper(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sessionID := fmt.Sprintf("%d", atomic.AddUint64(&sessionCount, 1))
 		targetURL := *(r.URL)
@@ -307,10 +333,7 @@ func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost b
 		if originalHost := r.Host; rewriteHost && originalHost != "" {
 			r.Header.Set("Host", originalHost)
 		}
-		conn, err := NewConnection(ctx, targetURL.String(), r.Header,
-			func(err error) {
-				log.Printf("Websocket failure: %v", err)
-			})
+		conn, err := NewConnection(ctx, targetURL.String(), r.Header, errorHandler.ReportError)
 		if err != nil {
 			log.Printf("Failed to dial the websocket server %q: %v\n", targetURL.String(), err)
 			statusCode := http.StatusInternalServerError
@@ -446,7 +469,11 @@ func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost b
 			}
 			if err := conn.SendClientMessage(msg.Message, enableWebsocketInjection, injectedHeaders); err != nil {
 				statusCode := http.StatusBadRequest
-				http.Error(w, fmt.Sprintf("attempt to send data on a closed session: %q", msg.ID), statusCode)
+				errorMessage := fmt.Sprintf("attempt to send data on a closed session: %q", msg.ID)
+				if closureReason := errorHandler.Error(); closureReason != nil {
+					errorMessage = fmt.Sprintf("attempt to send data on a closed session: %q, closure reason: %q", msg.ID, closureReason)
+				}
+				http.Error(w, errorMessage, statusCode)
 				metricHandler.WriteResponseCodeMetric(statusCode)
 				return
 			}
@@ -488,7 +515,11 @@ func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost b
 		serverMsgs, err := conn.ReadServerMessages()
 		if err != nil {
 			statusCode := http.StatusBadRequest
-			http.Error(w, fmt.Sprintf("attempt to read data from a closed session: %q", msg.ID), statusCode)
+			errorMessage := fmt.Sprintf("attempt to read data from a closed session: %q", msg.ID)
+			if closureReason := errorHandler.Error(); closureReason != nil {
+				errorMessage = fmt.Sprintf("attempt to read data from a closed session: %q, closure reason: %q", msg.ID, closureReason)
+			}
+			http.Error(w, errorMessage, statusCode)
 			metricHandler.WriteResponseCodeMetric(statusCode)
 			connections.Delete(msg.ID)
 			return

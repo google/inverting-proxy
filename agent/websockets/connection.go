@@ -137,6 +137,9 @@ func NewConnection(ctx context.Context, targetURL string, header http.Header, er
 				return
 			case clientMsg, ok := <-clientMessages:
 				if !ok {
+					// The Connection object was explicitly closed. We record that by passing `nil` to
+					// the error callback.
+					errCallback(nil)
 					return
 				}
 				if clientMsg == nil {
