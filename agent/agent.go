@@ -61,7 +61,8 @@ const (
 
 var (
 	proxy                     = flag.String("proxy", "", "URL (including scheme) of the inverting proxy")
-	proxyTimeout              = flag.Duration("proxy-timeout", 60*time.Second, "Client timeout when sending requests to the inverting proxy")
+	proxyTimeout              = flag.Duration("proxy-timeout", 60*time.Second, "Timeout for polling the inverting proxy for new requests")
+	requestForwardingTimeout  = flag.Duration("request-forwarding-timeout", 0*time.Second, "Timeout for forwarding individual requests to the backend and returning a response (matches proxy-timeout by default)")
 	host                      = flag.String("host", "localhost:8080", "Hostname (including port) of the backend server")
 	forceHTTP2                = flag.Bool("force-http2", false, "Force connections to the backend host to be performed using HTTP/2")
 	backendID                 = flag.String("backend", "", "Unique ID for this backend.")
@@ -212,7 +213,9 @@ func pollForNewRequests(pollingCtx context.Context, client *http.Client, hostPro
 			log.Printf("Request polling context completed with ctx err: %v\n", pollingCtx.Err())
 			return
 		default:
-			if requests, err := utils.ListPendingRequests(client, *proxy, backendID, metricHandler); err != nil {
+			listRequestsCtx, cancel := context.WithTimeout(pollingCtx, *proxyTimeout)
+			defer cancel()
+			if requests, err := utils.ListPendingRequests(listRequestsCtx, client, *proxy, backendID, metricHandler); err != nil {
 				log.Printf("Failed to read pending requests: %q\n", err.Error())
 				time.Sleep(utils.ExponentialBackoffDuration(retryCount))
 				retryCount++
@@ -304,7 +307,12 @@ func runAdapter(ctx context.Context, requestPollingCtx context.Context) error {
 	if err != nil {
 		return err
 	}
-	client.Timeout = *proxyTimeout
+
+	// Request forwarding should use the larger of proxyTimeout and requestForwardingTimeout
+	effectiveRequestForwardingTimeout := max(*proxyTimeout, *requestForwardingTimeout)
+	client.Timeout = effectiveRequestForwardingTimeout
+
+	log.Printf("Request forwarding timeout is %v; proxy timeout is %v\n", effectiveRequestForwardingTimeout, *proxyTimeout)
 
 	hostProxy, err := hostProxy(ctx, *host, *shimPath, *shimWebsockets, *forceHTTP2)
 	if err != nil {

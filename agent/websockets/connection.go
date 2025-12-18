@@ -57,11 +57,12 @@ func (m *message) Serialize(version int) interface{} {
 // and encapsulates it in an API that is a little more amenable to how the server side
 // of our websocket shim is implemented.
 type Connection struct {
-	ctx             context.Context
+	done            func() <-chan struct{}
 	cancel          context.CancelFunc
 	clientMessages  chan *message
 	serverMessages  chan *message
 	protocolVersion int
+	subprotocol     string
 }
 
 // This map defines the set of headers that should be stripped from the WS request, as they
@@ -106,12 +107,9 @@ func NewConnection(ctx context.Context, targetURL string, header http.Header, er
 	// push messages. That way our handling of reads and writes are consistent.
 	clientMessages := make(chan *message, 10)
 
-	closeConn := make(chan bool)
 	go func() {
-		defer func() {
-			close(serverMessages)
-			closeConn <- true
-		}()
+		defer close(serverMessages)
+		defer cancel()
 		for {
 			select {
 			case <-ctx.Done():
@@ -132,15 +130,16 @@ func NewConnection(ctx context.Context, targetURL string, header http.Header, er
 		}
 	}()
 	go func() {
-		defer func() {
-			closeConn <- true
-		}()
+		defer cancel()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case clientMsg, ok := <-clientMessages:
 				if !ok {
+					// The Connection object was explicitly closed. We record that by passing `nil` to
+					// the error callback.
+					errCallback(nil)
 					return
 				}
 				if clientMsg == nil {
@@ -156,19 +155,18 @@ func NewConnection(ctx context.Context, targetURL string, header http.Header, er
 		}
 	}()
 	go func() {
-		<-closeConn
-		// if either routines finishes, terminate the other
-		cancel()
+		<-ctx.Done()
 		// closing the serverConn. This will cause serverConn.ReadMessage to stop.
 		if err := serverConn.Close(); err != nil {
 			errCallback(fmt.Errorf("failure closing a server websocket connection: %v", err))
 		}
 	}()
 	return &Connection{
-		ctx:            ctx,
+		done:           ctx.Done,
 		cancel:         cancel,
 		clientMessages: clientMessages,
 		serverMessages: serverMessages,
+		subprotocol: serverConn.Subprotocol(),
 	}, nil
 }
 
@@ -224,7 +222,7 @@ func (conn *Connection) SendClientMessage(msg interface{}, injectionEnabled bool
 		}
 	}
 	select {
-	case <-conn.ctx.Done():
+	case <-conn.done():
 		return fmt.Errorf("attempt to send a client message on a closed websocket connection")
 	default:
 		conn.clientMessages <- clientMessage
@@ -262,6 +260,11 @@ func (conn *Connection) ReadServerMessages() ([]interface{}, error) {
 	case <-time.After(time.Second * 20):
 		return nil, nil
 	}
+}
+
+// Subprotocol reports the websocket subprotocol (if any) that was accepted by the server.
+func (conn *Connection) Subprotocol() string {
+	return conn.subprotocol
 }
 
 // injectWebsocketMessage injects a shim header value into a single websocket message in-place.
