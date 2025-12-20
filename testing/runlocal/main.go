@@ -185,6 +185,7 @@ func main() {
 		"--disable-ssl-for-test=true",
 		"--session-cookie-name=SessionID",
 		"--backend=testBackend",
+		"--stats-addr=localhost:3000",
 		"--proxy", proxyURL+"/",
 		"--host=localhost:"+backendURL.Port(),
 		"--inject-banner=\\<div\\ style=\"width:100%;color:white;background-color:#1a73e8;height:24;font-size:20;padding:8px\"\\>Inverting\\ Proxy\\</div\\>"),

@@ -217,7 +217,10 @@ func (c *Cache) addJarToCache(sessionID string, jar http.CookieJar) {
 
 // cachedCookieJar returns the CookieJar mapped to the sessionID
 func (c *Cache) cachedCookieJar(sessionID string) (jar http.CookieJar, err error) {
+	c.mu.Lock()
 	val, ok := c.cache.Get(sessionID)
+	c.mu.Unlock()
+
 	if !ok {
 		options := cookiejar.Options{
 			PublicSuffixList: publicsuffix.List,

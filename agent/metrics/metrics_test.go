@@ -15,8 +15,12 @@ package metrics
 
 import (
 	"context"
+	"expvar"
+	"fmt"
+	"math"
 	"reflect"
 	"testing"
+	"time"
 
 	gax "github.com/googleapis/gax-go/v2"
 	monitoringpb "google.golang.org/genproto/googleapis/monitoring/v3"
@@ -236,5 +240,199 @@ func TestWriteResponseCodeMetric_Empty(t *testing.T) {
 	var metricHandler *MetricHandler
 	if res := metricHandler.WriteResponseCodeMetric(200); res != nil {
 		t.Errorf("WriteResponseCodeMetric(): got: %v, want: %v", res, nil)
+	}
+}
+
+func TestRecordResponseCode(t *testing.T) {
+	// Reset expvar map for clean test
+	responseCodes = expvar.NewMap("response_codes_test")
+
+	testCases := []struct {
+		statusCode int
+		count      int
+		want       string
+	}{
+		{200, 1, "1"},
+		{200, 2, "3"},
+		{404, 1, "1"},
+		{500, 1, "1"},
+	}
+
+	for _, tc := range testCases {
+		for i := 0; i < tc.count; i++ {
+			RecordResponseCode(tc.statusCode)
+		}
+		codeStr := fmt.Sprintf("%d", tc.statusCode)
+		got := responseCodes.Get(codeStr)
+		if got == nil {
+			t.Errorf("RecordResponseCode(%d): code not recorded in expvar", tc.statusCode)
+			continue
+		}
+		if got.String() != tc.want {
+			t.Errorf("RecordResponseCode(%d) called %d times: got %v, want %v", tc.statusCode, tc.count, got.String(), tc.want)
+		}
+	}
+}
+
+func TestWriteResponseCodeMetric(t *testing.T) {
+	c := context.Background()
+	h, err := NewFakeMetricHandler(c, "test-project", "gce_instance", "instance-id=test-id,instance-zone=test-zone", "test-domain.googleapis.com")
+	if err != nil {
+		t.Fatalf("Failed to create handler: %v", err)
+	}
+
+	testCases := []struct {
+		statusCode int
+		callCount  int
+	}{
+		{200, 3},
+		{404, 1},
+		{500, 2},
+	}
+
+	for _, tc := range testCases {
+		for i := 0; i < tc.callCount; i++ {
+			if err := h.WriteResponseCodeMetric(tc.statusCode); err != nil {
+				t.Errorf("WriteResponseCodeMetric(%d): unexpected error: %v", tc.statusCode, err)
+			}
+		}
+	}
+
+	// Verify counts accumulated correctly
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if codeCount["200"] != 3 {
+		t.Errorf("WriteResponseCodeMetric(200) called 3 times: got count %d, want 3", codeCount["200"])
+	}
+	if codeCount["404"] != 1 {
+		t.Errorf("WriteResponseCodeMetric(404) called 1 time: got count %d, want 1", codeCount["404"])
+	}
+	if codeCount["500"] != 2 {
+		t.Errorf("WriteResponseCodeMetric(500) called 2 times: got count %d, want 2", codeCount["500"])
+	}
+}
+
+func TestEmitResponseCodeMetric(t *testing.T) {
+	c := context.Background()
+	client := &fakeMetricClient{}
+	h, err := newMetricHandlerHelper(c, "test-project", "gce_instance", "instance-id=test-id,instance-zone=test-zone", "test-domain.googleapis.com", client)
+	if err != nil {
+		t.Fatalf("Failed to create handler: %v", err)
+	}
+
+	// Record some response codes
+	h.WriteResponseCodeMetric(200)
+	h.WriteResponseCodeMetric(200)
+	h.WriteResponseCodeMetric(404)
+	h.WriteResponseCodeMetric(500)
+
+	// Emit metrics using emitMetrics (which also resets)
+	h.emitMetrics()
+
+	// Verify requests sent to fake client
+	if len(client.Requests) != 3 {
+		t.Errorf("emitMetrics(): got %d requests, want 3", len(client.Requests))
+	}
+
+	// Verify metric type and labels
+	for _, req := range client.Requests {
+		if len(req.TimeSeries) != 1 {
+			t.Errorf("Request has %d time series, want 1", len(req.TimeSeries))
+			continue
+		}
+
+		ts := req.TimeSeries[0]
+		if ts.Metric.Type != "test-domain.googleapis.com/instance/proxy_agent/response_count" {
+			t.Errorf("Wrong metric type: got %s", ts.Metric.Type)
+		}
+
+		// Verify labels exist
+		if _, ok := ts.Metric.Labels["response_code"]; !ok {
+			t.Error("Missing response_code label")
+		}
+		if _, ok := ts.Metric.Labels["response_code_class"]; !ok {
+			t.Error("Missing response_code_class label")
+		}
+	}
+
+	// Verify counts are reset after emission
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(codeCount) != 0 {
+		t.Errorf("codeCount not reset after emission: got %d entries, want 0", len(codeCount))
+	}
+}
+
+func TestCalculatePercentile(t *testing.T) {
+	testCases := []struct {
+		name       string
+		percentile float64
+		durations  []time.Duration
+		want       float64
+	}{
+		{
+			name:       "empty",
+			percentile: 50.0,
+			durations:  []time.Duration{},
+			want:       0.0,
+		},
+		{
+			name:       "single value",
+			percentile: 50.0,
+			durations:  []time.Duration{100 * time.Millisecond},
+			want:       100.0,
+		},
+		{
+			name:       "p50",
+			percentile: 50.0,
+			durations:  []time.Duration{10 * time.Millisecond, 20 * time.Millisecond, 30 * time.Millisecond},
+			want:       20.0,
+		},
+		{
+			name:       "p99",
+			percentile: 99.0,
+			durations:  []time.Duration{10 * time.Millisecond, 20 * time.Millisecond, 30 * time.Millisecond},
+			want:       29.8,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := calculatePercentile(tc.percentile, tc.durations)
+			if math.Abs(got-tc.want) > 0.01 {
+				t.Errorf("calculatePercentile(%v, %v): got %v, want %v", tc.percentile, tc.durations, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRecordResponseTime(t *testing.T) {
+	// Reset latencies for clean test
+	latenciesMutex.Lock()
+	latencies = make([]time.Duration, 0)
+	latenciesMutex.Unlock()
+
+	testLatencies := []time.Duration{
+		10 * time.Millisecond,
+		20 * time.Millisecond,
+		30 * time.Millisecond,
+	}
+
+	for _, lat := range testLatencies {
+		RecordResponseTime(lat)
+	}
+
+	latenciesMutex.Lock()
+	defer latenciesMutex.Unlock()
+
+	if len(latencies) != len(testLatencies) {
+		t.Errorf("RecordResponseTime(): got %d latencies, want %d", len(latencies), len(testLatencies))
+	}
+
+	for i, want := range testLatencies {
+		if latencies[i] != want {
+			t.Errorf("RecordResponseTime(): latencies[%d] = %v, want %v", i, latencies[i], want)
+		}
 	}
 }

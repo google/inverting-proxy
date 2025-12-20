@@ -49,6 +49,7 @@ import (
 	"github.com/google/inverting-proxy/agent/banner"
 	"github.com/google/inverting-proxy/agent/metrics"
 	"github.com/google/inverting-proxy/agent/sessions"
+	"github.com/google/inverting-proxy/agent/stats"
 	"github.com/google/inverting-proxy/agent/utils"
 	"github.com/google/inverting-proxy/agent/websockets"
 )
@@ -87,6 +88,7 @@ var (
 	sessionCookieCacheLimit = flag.Int("session-cookie-cache-limit", 1000, "Upper bound on the number of concurrent sessions that can be tracked by the agent")
 	rewriteWebsocketHost    = flag.Bool("rewrite-websocket-host", false, "Whether to rewrite the Host header to the original request when shimming a websocket connection")
 	stripCredentials        = flag.Bool("strip-credentials", false, "Whether to strip the Authorization header from all requests.")
+	statsAddr               = flag.String("stats-addr", "", "If non-empty, local address to serve HTTP page stats on. Serves on /stats")
 
 	projectID                = flag.String("monitoring-project-id", "", "Name of the GCP project id")
 	metricDomain             = flag.String("metric-domain", "", "Domain under which to write metrics eg. notebooks.googleapis.com")
@@ -162,9 +164,12 @@ func forwardRequest(client *http.Client, hostProxy http.Handler, request *utils.
 		return fmt.Errorf("failed to create the response forwarder: %v", err)
 	}
 	hostProxy.ServeHTTP(responseForwarder, httpRequest)
+	latency := time.Since(request.StartTime)
 	if *debug {
-		log.Printf("Backend latency for request %s: %s\n", request.RequestID, time.Since(request.StartTime).String())
+		log.Printf("Backend latency for request %s: %s\n", request.RequestID, latency.String())
 	}
+	// Always record for expvar metrics
+	metrics.RecordResponseTime(latency)
 	if err := responseForwarder.Close(); err != nil {
 		return fmt.Errorf("failed to close the response forwarder: %v", err)
 	}
@@ -332,6 +337,9 @@ func main() {
 	if *backendID == "" {
 		log.Fatal("You must specify a backend ID")
 	}
+	if *statsAddr != "" {
+		go stats.Start(*statsAddr, *backendID, *proxy)
+	}
 	if !strings.HasPrefix(*healthCheckPath, "/") {
 		*healthCheckPath = "/" + *healthCheckPath
 	}
@@ -342,6 +350,11 @@ func main() {
 	metricHandler = mh
 	if err != nil {
 		log.Printf("Unable to create metric handler: %v", err)
+	}
+
+	// Start expvar metrics update goroutine only if cloud monitoring is disabled
+	if metricHandler == nil {
+		metrics.StartExpvarMetrics()
 	}
 
 	waitForHealthy()
