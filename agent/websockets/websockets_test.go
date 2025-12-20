@@ -28,6 +28,7 @@ import (
 	"net/url"
 	"path"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -199,7 +200,11 @@ func TestInjectWebsocketMessage(t *testing.T) {
 
 func TestShimHandlers(t *testing.T) {
 	testShimPath := "/websocket-shim"
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		wg.Add(1)
+		defer wg.Done()
 		if !websocket.IsWebSocketUpgrade(r) {
 			http.Error(w, "only websocket connections are supported", http.StatusBadRequest)
 		}
