@@ -242,6 +242,17 @@ func getGoogleClient(ctx context.Context) (*http.Client, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		for _, prevReq := range via {
+			if prevReq.Method != req.Method {
+				return fmt.Errorf(
+					"Method change not allowed in redirect: %s -> %s", prevReq.Method, req.Method)
+			}
+		}
+		return nil
+	}
+
 	client.Transport = utils.RoundTripperWithVMIdentity(ctx, client.Transport, *proxy, *disableGCEVM)
 	client.Jar, err = cookiejar.New(&cookiejar.Options{
 		PublicSuffixList: publicsuffix.List,
