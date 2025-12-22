@@ -18,6 +18,7 @@ package websockets
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -31,8 +32,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"text/template"
-
-	"context"
 	"github.com/google/inverting-proxy/agent/metrics"
 )
 
