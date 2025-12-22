@@ -29,6 +29,7 @@ import (
 	"math"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -239,6 +240,10 @@ func ListPendingRequests(ctx context.Context, client *http.Client, proxyHost, ba
 	proxyReq.Header.Add(HeaderBackendID, backendID)
 	proxyResp, err := client.Do(proxyReq)
 	if err != nil {
+		if urlErr, ok := err.(*url.Error); ok && urlErr.Timeout() {
+			// The list pending either timed out or was cancelled; assume this means there are no pending requests.
+			return nil, nil
+		}
 		return nil, fmt.Errorf("A proxy request failed: %q", err.Error())
 	}
 	defer proxyResp.Body.Close()
