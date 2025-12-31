@@ -148,3 +148,28 @@ func TestSessionsDisabled(t *testing.T) {
 		t.Errorf("Unexpected cookies found when proxying a request without sessions: %v", cookies)
 	}
 }
+
+// TestConcurrentCacheAccess tests that concurrent access to cachedCookieJar is thread-safe
+func TestConcurrentCacheAccess(t *testing.T) {
+	c := NewCache(sessionCookie, sessionLifetime, sessionCount, true)
+
+	// Launch multiple goroutines that concurrently access the cache
+	done := make(chan bool)
+	for i := 0; i < 10; i++ {
+		go func(id int) {
+			sessionID := fmt.Sprintf("session-%d", id)
+			for range 100 {
+				_, err := c.cachedCookieJar(sessionID)
+				if err != nil {
+					t.Errorf("Error getting cookie jar: %v", err)
+				}
+			}
+			done <- true
+		}(i)
+	}
+
+	// Wait for all goroutines to complete
+	for i := 0; i < 10; i++ {
+		<-done
+	}
+}
