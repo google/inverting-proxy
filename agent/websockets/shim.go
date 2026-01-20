@@ -18,6 +18,7 @@ package websockets
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -31,9 +32,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"text/template"
+	"time"
 
-	"context"
-	"github.com/google/inverting-proxy/agent/metrics"
+	"google3/third_party/golang/invertingproxy/agent/metrics/metrics"
 )
 
 const (
@@ -295,36 +296,33 @@ type sessionMessage struct {
 	Subprotocol string      `json:"s,omitempty"`
 }
 
-type connectionErrorHandler struct {
-	mu            sync.Mutex
-	firstError    error
-	reportedError bool
-}
-
-func (c *connectionErrorHandler) Error() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.firstError
-}
-
-func (c *connectionErrorHandler) ReportError(err error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.reportedError {
-		return
-	}
-	c.reportedError = true
-	c.firstError = err
-	if err != nil {
-		log.Printf("Websocket failure: %v", err)
-	}
-}
-
-func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost bool, openWebsocketWrapper func(http.Handler, *metrics.MetricHandler) http.Handler, enableWebsocketInjection bool, metricHandler *metrics.MetricHandler) http.Handler {
+func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost bool, openWebsocketWrapper func(http.Handler, *metrics.MetricHandler) http.Handler, enableWebsocketInjection bool, metricHandler *metrics.MetricHandler, timeout time.Duration) http.Handler {
 	var connections sync.Map
 	var sessionCount uint64
+	// Background goroutine to clean up inactive websocket shim connections.
+	go func() {
+		ticker := time.NewTicker(min(timeout, 30*time.Second))
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				connections.Range(func(key, value any) bool {
+					sessionID := key.(string)
+					conn := value.(*Connection)
+					if time.Since(conn.lastActivity()) > timeout {
+						log.Printf("Closing inactive websocket shim session %q after timeout", sessionID)
+						conn.Close()
+						connections.Delete(sessionID)
+					}
+					return true // Continue iteration
+				})
+			}
+		}
+	}()
+
 	mux := http.NewServeMux()
-	errorHandler := &connectionErrorHandler{}
 	openWebsocketHandler := openWebsocketWrapper(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sessionID := fmt.Sprintf("%d", atomic.AddUint64(&sessionCount, 1))
 		targetURL := *(r.URL)
@@ -333,7 +331,10 @@ func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost b
 		if originalHost := r.Host; rewriteHost && originalHost != "" {
 			r.Header.Set("Host", originalHost)
 		}
-		conn, err := NewConnection(ctx, targetURL.String(), r.Header, errorHandler.ReportError)
+		conn, err := NewConnection(ctx, targetURL.String(), r.Header,
+			func(err error) {
+				log.Printf("Websocket failure: %v", err)
+			})
 		if err != nil {
 			log.Printf("Failed to dial the websocket server %q: %v\n", targetURL.String(), err)
 			statusCode := http.StatusInternalServerError
@@ -351,9 +352,9 @@ func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost b
 			}
 		}
 		resp := &sessionMessage{
-			ID:      sessionID,
-			Message: targetURL.String(),
-			Version: conn.protocolVersion,
+			ID:          sessionID,
+			Message:     targetURL.String(),
+			Version:     conn.protocolVersion,
 			Subprotocol: conn.Subprotocol(),
 		}
 		respBytes, err := json.Marshal(resp)
@@ -469,11 +470,7 @@ func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost b
 			}
 			if err := conn.SendClientMessage(msg.Message, enableWebsocketInjection, injectedHeaders); err != nil {
 				statusCode := http.StatusBadRequest
-				errorMessage := fmt.Sprintf("attempt to send data on a closed session: %q", msg.ID)
-				if closureReason := errorHandler.Error(); closureReason != nil {
-					errorMessage = fmt.Sprintf("attempt to send data on a closed session: %q, closure reason: %q", msg.ID, closureReason)
-				}
-				http.Error(w, errorMessage, statusCode)
+				http.Error(w, fmt.Sprintf("attempt to send data on a closed session: %q", msg.ID), statusCode)
 				metricHandler.WriteResponseCodeMetric(statusCode)
 				return
 			}
@@ -515,11 +512,7 @@ func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost b
 		serverMsgs, err := conn.ReadServerMessages()
 		if err != nil {
 			statusCode := http.StatusBadRequest
-			errorMessage := fmt.Sprintf("attempt to read data from a closed session: %q", msg.ID)
-			if closureReason := errorHandler.Error(); closureReason != nil {
-				errorMessage = fmt.Sprintf("attempt to read data from a closed session: %q, closure reason: %q", msg.ID, closureReason)
-			}
-			http.Error(w, errorMessage, statusCode)
+			http.Error(w, fmt.Sprintf("attempt to read data from a closed session: %q", msg.ID), statusCode)
 			metricHandler.WriteResponseCodeMetric(statusCode)
 			connections.Delete(msg.ID)
 			return
@@ -548,13 +541,14 @@ func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost b
 // openWebsocketWrapper is a http.Handler wrapper function that is invoked on websocket open requests after the original
 // targetURL of the request is restored. It must call the wrapped http.Handler with which it is created after it
 // is finished processing the request.
-func Proxy(ctx context.Context, wrapped http.Handler, host, shimPath string, rewriteHost, enableWebsocketInjection bool, openWebsocketWrapper func(wrapped http.Handler, metricHandler *metrics.MetricHandler) http.Handler, metricHandler *metrics.MetricHandler) (http.Handler, error) {
+func Proxy(ctx context.Context, wrapped http.Handler, host, shimPath string, rewriteHost, enableWebsocketInjection bool, openWebsocketWrapper func(wrapped http.Handler, metricHandler *metrics.MetricHandler) http.Handler, metricHandler *metrics.MetricHandler, timeout time.Duration) (http.Handler, error) {
 	mux := http.NewServeMux()
 	if shimPath != "" {
 		shimPath = path.Clean("/"+shimPath) + "/"
-		shimServer := createShimChannel(ctx, host, shimPath, rewriteHost, openWebsocketWrapper, enableWebsocketInjection, metricHandler)
+		shimServer := createShimChannel(ctx, host, shimPath, rewriteHost, openWebsocketWrapper, enableWebsocketInjection, metricHandler, timeout)
 		mux.Handle(shimPath, shimServer)
 	}
 	mux.Handle("/", wrapped)
 	return mux, nil
 }
+

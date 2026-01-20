@@ -17,17 +17,17 @@ limitations under the License.
 package websockets
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
-	"context"
-
-	"github.com/gorilla/websocket"
+	"google3/third_party/golang/gorilla/websocket/websocket"
 )
 
 var websocketShimInjectedHeadersPath = []string{"resource", "headers"}
@@ -57,12 +57,14 @@ func (m *message) Serialize(version int) interface{} {
 // and encapsulates it in an API that is a little more amenable to how the server side
 // of our websocket shim is implemented.
 type Connection struct {
-	done            func() <-chan struct{}
-	cancel          context.CancelFunc
-	clientMessages  chan *message
-	serverMessages  chan *message
-	protocolVersion int
-	subprotocol     string
+	done             func() <-chan struct{}
+	cancel           context.CancelFunc
+	clientMessages   chan *message
+	serverMessages   chan *message
+	protocolVersion  int
+	subprotocol      string
+	mu               sync.Mutex
+	lastActivityTime time.Time
 }
 
 // This map defines the set of headers that should be stripped from the WS request, as they
@@ -85,6 +87,20 @@ func stripWSHeader(header http.Header) http.Header {
 		}
 	}
 	return result
+}
+
+// updateActivity updates the last activity timestamp.
+func (conn *Connection) updateActivity() {
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+	conn.lastActivityTime = time.Now()
+}
+
+// lastActivity returns the last activity timestamp.
+func (conn *Connection) lastActivity() time.Time {
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+	return conn.lastActivityTime
 }
 
 // NewConnection creates and returns a new Connection.
@@ -137,9 +153,6 @@ func NewConnection(ctx context.Context, targetURL string, header http.Header, er
 				return
 			case clientMsg, ok := <-clientMessages:
 				if !ok {
-					// The Connection object was explicitly closed. We record that by passing `nil` to
-					// the error callback.
-					errCallback(nil)
 					return
 				}
 				if clientMsg == nil {
@@ -162,11 +175,12 @@ func NewConnection(ctx context.Context, targetURL string, header http.Header, er
 		}
 	}()
 	return &Connection{
-		done:           ctx.Done,
-		cancel:         cancel,
-		clientMessages: clientMessages,
-		serverMessages: serverMessages,
-		subprotocol: serverConn.Subprotocol(),
+		done:             ctx.Done,
+		cancel:           cancel,
+		clientMessages:   clientMessages,
+		serverMessages:   serverMessages,
+		subprotocol:      serverConn.Subprotocol(),
+		lastActivityTime: time.Now(),
 	}, nil
 }
 
@@ -184,6 +198,7 @@ func (conn *Connection) Close() {
 //
 // The returned error value is non-nill if the connection has been closed.
 func (conn *Connection) SendClientMessage(msg interface{}, injectionEnabled bool, injectedHeaders map[string]string) error {
+	conn.updateActivity()
 	var clientMessage *message
 	if textMsg, ok := msg.(string); ok {
 		clientMessage = &message{
@@ -244,6 +259,7 @@ func (conn *Connection) ReadServerMessages() ([]interface{}, error) {
 			// The server messages channel has been closed.
 			return nil, fmt.Errorf("attempt to read a server message from a closed websocket connection")
 		}
+		conn.updateActivity()
 		msgs = append(msgs, serverMsg.Serialize(conn.protocolVersion))
 		for {
 			select {
@@ -307,3 +323,4 @@ func injectWebsocketMessage(msg *message, injectionPath []string, injectionValue
 
 	return &message{Type: msg.Type, Data: newMsgBytes}, nil
 }
+
