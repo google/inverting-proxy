@@ -236,6 +236,13 @@ func isHopByHopHeader(name string) bool {
 }
 
 func websocketShimResponseHandlerOpen(resp *http.Response, ws *wsSessionHelper) error {
+	if resp.StatusCode != http.StatusOK {
+		respBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("%v/open: http status code %v, error reading response body", shimPath, resp.StatusCode)
+		}
+		return fmt.Errorf("%v/open: http status code %v, response: %v", shimPath, resp.StatusCode, string(respBody))
+	}
 	p, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("%v/open: failed to read response from agent: %v", shimPath, err)
@@ -243,17 +250,6 @@ func websocketShimResponseHandlerOpen(resp *http.Response, ws *wsSessionHelper) 
 	err = json.Unmarshal(p, &ws.sessionInfo)
 	if err != nil {
 		return fmt.Errorf("%v/open: failed to parse JSON encoded data: %v", shimPath, err)
-	}
-	return nil
-}
-
-func websocketShimResponseHandlerData(resp *http.Response, ws *wsSessionHelper) error {
-	if resp.StatusCode != http.StatusOK {
-		respBody, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return fmt.Errorf("%v/data: http status code is %v, error reading response body", shimPath, resp.StatusCode)
-		}
-		return fmt.Errorf("%v/data: http status code %v, response: %v", shimPath, resp.StatusCode, string(respBody))
 	}
 	return nil
 }
@@ -271,13 +267,6 @@ func websocketShimResponseHandlerPoll(resp *http.Response, ws *wsSessionHelper) 
 		return fmt.Errorf("failed to read response from agent: %v", err)
 	}
 	ws.writeChan <- p
-	return nil
-}
-
-func websocketShimResponseHandlerClose(resp *http.Response, ws *wsSessionHelper) error {
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%v/close: http status code %v", shimPath, resp.StatusCode)
-	}
 	return nil
 }
 
@@ -318,15 +307,22 @@ func (p *proxy) handleFrontendRequest(w http.ResponseWriter, r *http.Request, ws
 		return fmt.Errorf("timeout waiting for the response to %q", id)
 	case resp := <-pending.respChan:
 		// websocket shim endpoint handling
-		switch resp.Request.URL.Path {
-		case shimPath + "/open":
-			return websocketShimResponseHandlerOpen(resp, ws)
-		case shimPath + "/data":
-			return websocketShimResponseHandlerData(resp, ws)
-		case shimPath + "/poll":
-			return websocketShimResponseHandlerPoll(resp, ws)
-		case shimPath + "/close":
-			return websocketShimResponseHandlerClose(resp, ws)
+		if ws != nil {
+			// websocket shim endpoint handling
+			if resp.StatusCode != http.StatusOK {
+				respBody, err := io.ReadAll(resp.Body)
+				if err != nil {
+					return fmt.Errorf("%v: http status code is %v, error reading response body", r.URL.Path, resp.StatusCode)
+				}
+				return fmt.Errorf("%v: http status code %v, response: %v", r.URL.Path, resp.StatusCode, string(respBody))
+			}
+			switch r.URL.Path {
+			case shimPath + "/open":
+				return websocketShimResponseHandlerOpen(resp, ws)
+			case shimPath + "/poll":
+				return websocketShimResponseHandlerPoll(resp, ws)
+			}
+			return nil
 		}
 
 		// Copy all of the non-hop-by-hop headers to the proxied response
@@ -411,7 +407,7 @@ func (p *proxy) handleWebsocketRequest(w http.ResponseWriter, r *http.Request) e
 		}
 		req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://:%v%v/close", port, shimPath), bytes.NewBuffer(buf))
 		if err != nil {
-			log.Printf("Failed to create a new open request: %v", err)
+			log.Printf("Failed to create a new close request: %v", err)
 			return
 		}
 		req.Header.Set("X-Websocket-Shim-Version", "1")
@@ -571,7 +567,7 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 	flag.IntVar(&port, "port", 0, "Port on which to listen")
-	flag.IntVar(&setReadLimit, "ws-read-limit", 0, "websocket read limit from client in bytes")
+	flag.IntVar(&setReadLimit, "ws-read-limit", -1, "websocket read limit from client in bytes")
 	flag.IntVar(&bufSize, "ws-buffer-size", 1024*4, "websocket buffer size for writes")
 	flag.StringVar(&shimPath, "shim-path", "", "Path under which to handle websocket shim requests")
 
