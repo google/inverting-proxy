@@ -285,7 +285,7 @@ func (p *proxy) handleFrontendRequest(w http.ResponseWriter, r *http.Request, ws
 	p.Lock()
 	p.requests[id] = pending
 	p.Unlock()
-	defer func(){
+	defer func() {
 		p.Lock()
 		delete(p.requests, id)
 		p.Unlock()
@@ -411,7 +411,7 @@ func (p *proxy) handleWebsocketRequest(w http.ResponseWriter, r *http.Request) e
 			return
 		}
 		req.Header.Set("X-Websocket-Shim-Version", "1")
-		p.handleFrontendRequest(nil, req, nil)
+		p.handleFrontendRequest(nil, req, ws)
 		ctxCancel()
 		conn.CloseNow()
 	}()
@@ -506,7 +506,7 @@ func (p *proxy) handleWebsocketRequest(w http.ResponseWriter, r *http.Request) e
 			}
 			req.Header.Set("X-Websocket-Shim-Version", "1")
 
-			err = p.handleFrontendRequest(nil, req, nil)
+			err = p.handleFrontendRequest(nil, req, ws)
 			if err != nil {
 				return err
 			}
