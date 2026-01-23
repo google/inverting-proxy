@@ -73,6 +73,7 @@ var (
 	injectBanner              = flag.String("inject-banner", "", "HTML snippet to inject in served webpages")
 	bannerHeight              = flag.String("banner-height", "40px", "Height of the injected banner. This is ignored if no banner is set.")
 	shimWebsockets            = flag.Bool("shim-websockets", false, "Whether or not to replace websockets with a shim")
+	websocketShimTimeout      = flag.Duration("websocket-shim-timeout", 60*time.Minute, "Timeout for websocket shim connections to expire due to inactivity.")
 	shimPath                  = flag.String("shim-path", "", "Path under which to handle websocket shim requests")
 	healthCheckPath           = flag.String("health-check-path", "/", "Path on backend host to issue health checks against.  Defaults to the root.")
 	healthCheckFreq           = flag.Int("health-check-interval-seconds", 0, "Wait time in seconds between health checks.  Set to zero to disable health checks.  Checks disabled by default.")
@@ -126,7 +127,8 @@ func hostProxy(ctx context.Context, host, shimPath string, injectShimCode, force
 		// restricted to a path prefix not equal to "/" will fail for websocket open requests. Passing in the
 		// sessionHandler twice allows the websocket handler to ensure that cookies are applied based on the
 		// correct, restored path.
-		h, err = websockets.Proxy(ctx, h, host, shimPath, *rewriteWebsocketHost, *enableWebsocketsInjection, sessionLRU.SessionHandler, metricHandler)
+		h, err = websockets.Proxy(ctx, h, host, shimPath, *rewriteWebsocketHost, *enableWebsocketsInjection, sessionLRU.SessionHandler,
+			metricHandler, *websocketShimTimeout)
 		if injectShimCode {
 			shimFunc, err := websockets.ShimBody(shimPath)
 			if err != nil {
