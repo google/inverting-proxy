@@ -369,7 +369,7 @@ func (p *proxy) handleWebsocketRequest(w http.ResponseWriter, r *http.Request) e
 	ws := newWsSessionHelper()
 
 	// websocket: shimPath/open
-	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://:%v%v/open", port, shimPath), nil)
+	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://:%v%v/open", port, shimPath), bytes.NewBuffer([]byte("ws://"+r.Host+r.URL.RequestURI())))
 	if err != nil {
 		return fmt.Errorf("failed to create a new %v/open request: %v", shimPath, err)
 	}
