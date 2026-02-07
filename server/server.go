@@ -236,13 +236,6 @@ func isHopByHopHeader(name string) bool {
 }
 
 func websocketShimResponseHandlerOpen(resp *http.Response, ws *wsSessionHelper) error {
-	if resp.StatusCode != http.StatusOK {
-		respBody, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return fmt.Errorf("%v/open: http status code %v, error reading response body", shimPath, resp.StatusCode)
-		}
-		return fmt.Errorf("%v/open: http status code %v, response: %v", shimPath, resp.StatusCode, string(respBody))
-	}
 	p, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("%v/open: failed to read response from agent: %v", shimPath, err)
@@ -255,13 +248,6 @@ func websocketShimResponseHandlerOpen(resp *http.Response, ws *wsSessionHelper) 
 }
 
 func websocketShimResponseHandlerPoll(resp *http.Response, ws *wsSessionHelper) error {
-	if resp.StatusCode != http.StatusOK {
-		respBody, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return fmt.Errorf("%v/poll: http status code %v, error reading response body", shimPath, resp.StatusCode)
-		}
-		return fmt.Errorf("%v/poll: http status code %v, response: %v", shimPath, resp.StatusCode, string(respBody))
-	}
 	p, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("failed to read response from agent: %v", err)
@@ -308,7 +294,6 @@ func (p *proxy) handleFrontendRequest(w http.ResponseWriter, r *http.Request, ws
 	case resp := <-pending.respChan:
 		// websocket shim endpoint handling
 		if ws != nil {
-			// websocket shim endpoint handling
 			if resp.StatusCode != http.StatusOK {
 				respBody, err := io.ReadAll(resp.Body)
 				if err != nil {
@@ -365,13 +350,26 @@ func parseServerMessage(buf interface{}) ([]byte, websocket.MessageType, error) 
 	return nil, websocket.MessageBinary, errors.New("unexpected data format from server")
 }
 
+func newShimRequest(host string, endpoint string, body []byte) (*http.Request, error) {
+	req, err := http.NewRequest(
+		http.MethodPost,
+		fmt.Sprintf("http://%v%v/%v", host, shimPath, endpoint),
+		bytes.NewBuffer(body),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create HTTP request: %v", err)
+	}
+	req.Header.Set("X-Websocket-Shim-Version", "1")
+	return req, nil
+}
+
 func (p *proxy) handleWebsocketRequest(w http.ResponseWriter, r *http.Request) error {
 	ws := newWsSessionHelper()
 
 	// websocket: shimPath/open
-	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://:%v%v/open", port, shimPath), bytes.NewBuffer([]byte("ws://"+r.Host+r.URL.RequestURI())))
+	req, err := newShimRequest(r.Host, "open", []byte("ws://"+r.Host+r.URL.RequestURI()))
 	if err != nil {
-		return fmt.Errorf("failed to create a new %v/open request: %v", shimPath, err)
+		return fmt.Errorf("failed to create a new open request: %v", err)
 	}
 
 	for k, v := range r.Header {
@@ -379,9 +377,7 @@ func (p *proxy) handleWebsocketRequest(w http.ResponseWriter, r *http.Request) e
 			req.Header.Set(k, strings.Join(v, ", "))
 		}
 	}
-	// to avoid CORS errors
-	req.Header.Set("Origin", "")
-	req.Header.Set("X-Websocket-Shim-Version", "1")
+	req.Header.Set("Origin", "") // to avoid CORS errors
 
 	err = p.handleFrontendRequest(nil, req, ws)
 	if err != nil {
@@ -405,12 +401,12 @@ func (p *proxy) handleWebsocketRequest(w http.ResponseWriter, r *http.Request) e
 			log.Printf("Failed to encoded data in JSON format: %v", err)
 			return
 		}
-		req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://:%v%v/close", port, shimPath), bytes.NewBuffer(buf))
+
+		req, err := newShimRequest(r.Host, "close", buf)
 		if err != nil {
 			log.Printf("Failed to create a new close request: %v", err)
 			return
 		}
-		req.Header.Set("X-Websocket-Shim-Version", "1")
 		p.handleFrontendRequest(nil, req, ws)
 		ctxCancel()
 		conn.CloseNow()
@@ -455,12 +451,11 @@ func (p *proxy) handleWebsocketRequest(w http.ResponseWriter, r *http.Request) e
 				log.Printf("Failed to encoded data in JSON format: %v", err)
 				return
 			}
-			req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://:%v%v/poll", port, shimPath), bytes.NewBuffer(buf))
+			req, err := newShimRequest(r.Host, "poll", buf)
 			if err != nil {
-				log.Printf("Failed to create a new open request: %v", err)
+				log.Printf("Failed to create a new poll request: %v", err)
 				return
 			}
-			req.Header.Set("X-Websocket-Shim-Version", "1")
 			err = p.handleFrontendRequest(nil, req, ws)
 			if err != nil {
 				log.Print(err)
@@ -500,11 +495,10 @@ func (p *proxy) handleWebsocketRequest(w http.ResponseWriter, r *http.Request) e
 			}
 
 			// send data to agent via HTTP
-			req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://:%v%v/data", port, shimPath), bytes.NewBuffer(buf))
+			req, err := newShimRequest(r.Host, "data", buf)
 			if err != nil {
-				return fmt.Errorf("failed to create a new open request: %v", err)
+				return fmt.Errorf("failed to create a new data request: %v", err)
 			}
-			req.Header.Set("X-Websocket-Shim-Version", "1")
 
 			err = p.handleFrontendRequest(nil, req, ws)
 			if err != nil {
