@@ -31,6 +31,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"time"
 
 	"github.com/google/inverting-proxy/agent/metrics"
 	"github.com/google/inverting-proxy/agent/websockets"
@@ -48,6 +49,7 @@ var (
 	monitoringEndpoint       = flag.String("monitoring-endpoint", "staging-monitoring.sandbox.googleapis.com:443", "The endpoint to which to write metrics. Eg: monitoring.googleapis.com corresponds to Cloud Monarch.")
 	monitoringResourceType   = flag.String("monitoring-resource-type", "gce_instance", "The monitoring resource type. Eg: gce_instance")
 	monitoringResourceLabels = flag.String("monitoring-resource-labels", "instance-id=fake-instance-id,instance-zone=us-west1-a", "Comma separated key value pairs for the purpose of monitoring configuration. Eg: 'instance-id=my-instance-id,instance-zone=us-west1-a")
+	websocketShimTimeout     = flag.Duration("websocket-shim-timeout", 60*time.Minute, "Timeout for websocket shim connections to expire due to inactivity.")
 )
 
 func main() {
@@ -69,7 +71,7 @@ func main() {
 	}
 
 	backendProxy := httputil.NewSingleHostReverseProxy(backendURL)
-	shimmingProxy, err := websockets.Proxy(context.Background(), backendProxy, backendURL.Host, *shimPath, true, *enableWebsocketInjection, func(h http.Handler, metricHandler *metrics.MetricHandler) http.Handler { return h }, metricHandler)
+	shimmingProxy, err := websockets.Proxy(context.Background(), backendProxy, backendURL.Host, *shimPath, true, *enableWebsocketInjection, func(h http.Handler, metricHandler *metrics.MetricHandler) http.Handler { return h }, metricHandler, *websocketShimTimeout)
 	if err != nil {
 		log.Fatalf("Failure starting the websocket-shimming proxy: %v", err)
 	}

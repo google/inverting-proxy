@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -30,6 +31,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
@@ -239,7 +241,7 @@ func TestShimHandlers(t *testing.T) {
 	openWrapper := func(h http.Handler, metricHandler *metrics.MetricHandler) http.Handler {
 		return h
 	}
-	p, err := Proxy(context.Background(), h, serverURL.Host, testShimPath, false, false, openWrapper, nil)
+	p, err := Proxy(context.Background(), h, serverURL.Host, testShimPath, false, false, openWrapper, nil, 60*time.Second)
 	if err != nil {
 		t.Fatalf("Failure creating the websocket shim proxy: %+v", err)
 	}
@@ -352,5 +354,109 @@ func TestShimHandlers(t *testing.T) {
 		if err := closeConnection(sessionID); err != nil {
 			t.Errorf("Failure closing the connection: %v", err)
 		}
+	}
+}
+
+func TestShimPolling(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// Setup a fake backend that accepts websocket connections but sends no messages.
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Logf("Failed to upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		// Keep connection open until client closes it.
+		for {
+			if _, _, err := conn.NextReader(); err != nil {
+				break
+			}
+		}
+	}))
+	defer backend.Close()
+
+	backendURL, err := url.Parse(backend.URL)
+	if err != nil {
+		t.Fatalf("Failed to parse backend URL: %v", err)
+	}
+
+	shimPath := "/shim/"
+	idleTimeout := 3 * time.Second
+	shim := createShimChannel(
+		ctx,
+		backendURL.Host,
+		shimPath,
+		false,
+		func(h http.Handler, m *metrics.MetricHandler) http.Handler { return h },
+		false,
+		nil,
+		idleTimeout,
+	)
+	shimServer := httptest.NewServer(shim)
+	defer shimServer.Close()
+
+	// 1. Open a websocket connection via the shim.
+	openURL := shimServer.URL + shimPath + "open"
+	resp, err := http.Post(openURL, "text/plain", strings.NewReader(backendURL.String()))
+	if err != nil {
+		t.Fatalf("Failed to open shim connection: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Failed to open shim connection, status: %d", resp.StatusCode)
+	}
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("Failed to read open response body: %v", err)
+	}
+	resp.Body.Close()
+	var openResp sessionMessage
+	if err := json.Unmarshal(body, &openResp); err != nil {
+		t.Fatalf("Failed to unmarshal open response: %v", err)
+	}
+	sessionID := openResp.ID
+	if sessionID == "" {
+		t.Fatal("No sessionID in open response")
+	}
+
+	// 2. Poll repeatedly without any messages being sent.
+	pollURL := shimServer.URL + shimPath + "poll"
+	pollReq := fmt.Sprintf(`{"id": %q}`, sessionID)
+	timeout := time.Now().Add(idleTimeout + 1*time.Second)
+	for time.Now().Before(timeout) {
+		resp, err := http.Post(pollURL, "application/json", strings.NewReader(pollReq))
+		if err != nil {
+			t.Fatalf("Failed to poll shim connection: %v", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusRequestTimeout {
+			t.Fatalf("Unexpected status code during polling: %d", resp.StatusCode)
+		}
+		// Sleep for half of read timeout to simulate polling faster than idle timeout.
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	// 3. After idleTimeout + 1s, one more poll should succeed.
+	resp, err = http.Post(pollURL, "application/json", strings.NewReader(pollReq))
+	if err != nil {
+		t.Fatalf("Failed to poll shim connection: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestTimeout {
+		t.Errorf("Polling after idle timeout got status %d, want %d", resp.StatusCode, http.StatusRequestTimeout)
+	}
+
+	// 4. Close connection.
+	closeURL := shimServer.URL + shimPath + "close"
+	closeReq := fmt.Sprintf(`{"id": %q}`, sessionID)
+	resp, err = http.Post(closeURL, "application/json", strings.NewReader(closeReq))
+	if err != nil {
+		t.Fatalf("Failed to close shim connection: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("Close shim connection got status %d, want %d", resp.StatusCode, http.StatusOK)
 	}
 }
