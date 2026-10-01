@@ -321,6 +321,17 @@ func (c *connectionErrorHandler) ReportError(err error) {
 	}
 }
 
+// loggableURL formats u for log messages. The whole query is replaced, not just
+// its values, because a query need not consist of key=value pairs.
+func loggableURL(u url.URL) string {
+	u.User = nil
+	u.Fragment = ""
+	if u.RawQuery != "" {
+		u.RawQuery = "REDACTED"
+	}
+	return u.String()
+}
+
 func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost bool, openWebsocketWrapper func(http.Handler, *metrics.MetricHandler) http.Handler, enableWebsocketInjection bool, metricHandler *metrics.MetricHandler, timeout time.Duration) http.Handler {
 	var connections sync.Map
 	var sessionCount uint64
@@ -360,14 +371,14 @@ func createShimChannel(ctx context.Context, host, shimPath string, rewriteHost b
 		}
 		conn, err := NewConnection(ctx, targetURL.String(), r.Header, errorHandler.ReportError)
 		if err != nil {
-			log.Printf("Failed to dial the websocket server %q: %v\n", targetURL.String(), err)
+			log.Printf("Failed to dial the websocket server %q: %v\n", loggableURL(targetURL), err)
 			statusCode := http.StatusInternalServerError
 			http.Error(w, fmt.Sprintf("internal error opening a shim connection: %v", err), statusCode)
 			metricHandler.WriteResponseCodeMetric(statusCode)
 			return
 		}
 		connections.Store(sessionID, conn)
-		log.Printf("Websocket connection to the server %q established for session: %v\n", targetURL.String(), sessionID)
+		log.Printf("Websocket connection to the server %q established for session: %v\n", loggableURL(targetURL), sessionID)
 		vh := r.Header.Get("X-Websocket-Shim-Version")
 		if vh != "" {
 			v, err := strconv.ParseInt(vh, 10, 64)

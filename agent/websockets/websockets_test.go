@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -458,5 +459,184 @@ func TestShimPolling(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("Close shim connection got status %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+}
+
+func TestLoggableURL(t *testing.T) {
+	testCases := []struct {
+		description string
+		rawURL      string
+		want        string
+	}{
+		{
+			description: "URL without a query is unchanged",
+			rawURL:      "ws://localhost:8080/api/kernels/k1/channels",
+			want:        "ws://localhost:8080/api/kernels/k1/channels",
+		},
+		{
+			description: "Query of key=value pairs is replaced",
+			rawURL:      "ws://localhost:8080/api/kernels/k1/channels?session_id=abc&k=v",
+			want:        "ws://localhost:8080/api/kernels/k1/channels?REDACTED",
+		},
+		{
+			description: "Query component without a key is replaced",
+			rawURL:      "ws://localhost:8080/channels?value-without-key",
+			want:        "ws://localhost:8080/channels?REDACTED",
+		},
+		{
+			description: "Malformed query is replaced",
+			rawURL:      "ws://localhost:8080/channels?a=1;b=%zz",
+			want:        "ws://localhost:8080/channels?REDACTED",
+		},
+		{
+			description: "Userinfo and fragment are removed",
+			rawURL:      "ws://user:pass@localhost:8080/channels?a=1#fragment",
+			want:        "ws://localhost:8080/channels?REDACTED",
+		},
+	}
+
+	for _, testCase := range testCases {
+		testCase := testCase
+		t.Run(testCase.description, func(t *testing.T) {
+			t.Parallel()
+			u, err := url.Parse(testCase.rawURL)
+			if err != nil {
+				t.Fatalf("url.Parse(%q): %v", testCase.rawURL, err)
+			}
+			if got, want := loggableURL(*u), testCase.want; got != want {
+				t.Errorf("loggableURL(%q): got %q, want %q", testCase.rawURL, got, want)
+			}
+		})
+	}
+}
+
+// syncBuffer lets the test read log output while other goroutines may still be logging.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func TestShimOpenRedactsQueryInLogs(t *testing.T) {
+	const (
+		clientPath  = "/api/kernels/k1/channels"
+		clientQuery = "session_id=query-value-1&k=query-value-2&query-value-3"
+	)
+	testCases := []struct {
+		description   string
+		acceptUpgrade bool
+		wantStatus    int
+		wantLogFormat string
+	}{
+		{
+			description:   "Successful dial",
+			acceptUpgrade: true,
+			wantStatus:    http.StatusOK,
+			wantLogFormat: "Websocket connection to the server %q established",
+		},
+		{
+			description:   "Failed dial",
+			acceptUpgrade: false,
+			wantStatus:    http.StatusInternalServerError,
+			wantLogFormat: "Failed to dial the websocket server %q",
+		},
+	}
+	for _, testCase := range testCases {
+		testCase := testCase
+		t.Run(testCase.description, func(t *testing.T) {
+			logs := &syncBuffer{}
+			prevLogOutput := log.Writer()
+			log.SetOutput(logs)
+			defer log.SetOutput(prevLogOutput)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			backendQueries := make(chan string, 1)
+			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				backendQueries <- r.URL.RawQuery
+				if !testCase.acceptUpgrade {
+					http.Error(w, "websocket connections are not accepted", http.StatusForbidden)
+					return
+				}
+				upgrader := websocket.Upgrader{}
+				conn, err := upgrader.Upgrade(w, r, nil)
+				if err != nil {
+					t.Logf("Failed to upgrade websocket: %v", err)
+					return
+				}
+				defer conn.Close()
+				for {
+					if _, _, err := conn.NextReader(); err != nil {
+						return
+					}
+				}
+			}))
+			defer backend.Close()
+			backendURL, err := url.Parse(backend.URL)
+			if err != nil {
+				t.Fatalf("Failed to parse backend URL: %v", err)
+			}
+
+			shimPath := "/shim/"
+			shim := createShimChannel(ctx, backendURL.Host, shimPath, false,
+				func(h http.Handler, m *metrics.MetricHandler) http.Handler { return h },
+				false, nil, time.Minute)
+			shimServer := httptest.NewServer(shim)
+			defer shimServer.Close()
+
+			clientURL := "ws://notebook.example.com" + clientPath + "?" + clientQuery
+			resp, err := http.Post(shimServer.URL+shimPath+"open", "text/plain", strings.NewReader(clientURL))
+			if err != nil {
+				t.Fatalf("Failed to send the open request: %v", err)
+			}
+			defer resp.Body.Close()
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatalf("Failed to read the open response: %v", err)
+			}
+			if got, want := resp.StatusCode, testCase.wantStatus; got != want {
+				t.Fatalf("Unexpected open response status: got %d, want %d, body %q", got, want, body)
+			}
+
+			select {
+			case got := <-backendQueries:
+				if got != clientQuery {
+					t.Errorf("Unexpected query received by the backend: got %q, want %q", got, clientQuery)
+				}
+			case <-time.After(10 * time.Second):
+				t.Error("The backend did not receive the websocket request")
+			}
+			targetURL := "ws://" + backendURL.Host + clientPath
+			if testCase.acceptUpgrade {
+				var openResp sessionMessage
+				if err := json.Unmarshal(body, &openResp); err != nil {
+					t.Fatalf("Failed to parse the open response: %v", err)
+				}
+				if got, want := openResp.Message, targetURL+"?"+clientQuery; got != want {
+					t.Errorf("Unexpected URL in the open response: got %q, want %q", got, want)
+				}
+			}
+
+			logged := logs.String()
+			if want := fmt.Sprintf(testCase.wantLogFormat, targetURL+"?REDACTED"); !strings.Contains(logged, want) {
+				t.Errorf("Log output does not contain %q: %q", want, logged)
+			}
+			for _, part := range []string{"session_id", "query-value-1", "query-value-2", "query-value-3"} {
+				if strings.Contains(logged, part) {
+					t.Errorf("Log output contains %q from the request query: %q", part, logged)
+				}
+			}
+		})
 	}
 }
