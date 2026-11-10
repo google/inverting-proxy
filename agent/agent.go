@@ -79,6 +79,7 @@ var (
 	healthCheckFreq           = flag.Int("health-check-interval-seconds", 0, "Wait time in seconds between health checks.  Set to zero to disable health checks.  Checks disabled by default.")
 	healthCheckUnhealthy      = flag.Int("health-check-unhealthy-threshold", 2, "A so-far healthy backend will be marked unhealthy after this many consecutive failures. The minimum value is 1.")
 	disableGCEVM              = flag.Bool("disable-gce-vm-header", false, "Disable the agent from adding a GCE VM header.")
+	requireGCEVM              = flag.Bool("require-gce-vm-header", false, "Require the agent to add a GCE VM header. The agent will wait until it can read the VM's default service account from the metadata server before it starts polling the proxy, rather than falling back to omitting the header.")
 	enableWebsocketsInjection = flag.Bool("enable-websockets-injection", false, "Enables the injection of HTTP headers into websocket messages. "+
 		"Websocket message injection will inject all headers from the HTTP request to /data and inject them "+
 		"into JSON-serialized websocket messages at the JSONPath `resource.headers`")
@@ -244,7 +245,11 @@ func getGoogleClient(ctx context.Context) (*http.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	client.Transport = utils.RoundTripperWithVMIdentity(ctx, client.Transport, *proxy, *disableGCEVM)
+	if *requireGCEVM {
+		client.Transport = utils.RoundTripperWithRequiredVMIdentity(ctx, client.Transport, *proxy)
+	} else {
+		client.Transport = utils.RoundTripperWithVMIdentity(ctx, client.Transport, *proxy, *disableGCEVM)
+	}
 	client.Jar, err = cookiejar.New(&cookiejar.Options{
 		PublicSuffixList: publicsuffix.List,
 	})
@@ -333,6 +338,9 @@ func main() {
 	}
 	if *backendID == "" {
 		log.Fatal("You must specify a backend ID")
+	}
+	if *disableGCEVM && *requireGCEVM {
+		log.Fatal("You cannot specify both -disable-gce-vm-header and -require-gce-vm-header")
 	}
 	if !strings.HasPrefix(*healthCheckPath, "/") {
 		*healthCheckPath = "/" + *healthCheckPath

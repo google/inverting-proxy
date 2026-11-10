@@ -83,6 +83,9 @@ const (
 	// Max number of retries to perform in case of failed write response calls
 	maxWriteResponseRetryCount = 2
 
+	// Max time to retry transient errors when checking for a VM service account
+	vmServiceAccountRetryTimeout = 60 * time.Second
+
 	// Size of the buffer that stores the beginning of read response body
 	readResponseBufSize = 4096
 )
@@ -90,6 +93,13 @@ const (
 var (
 	// compute the max retry count
 	maxRetryCount = math.Log2(float64(maxBackoffDuration / firstRetryWaitDuration))
+
+	onGCE        = metadata.OnGCE
+	metadataGet  = metadata.Get
+	now          = time.Now
+	backoffSleep = func(retryCount uint) {
+		time.Sleep(ExponentialBackoffDuration(retryCount))
+	}
 )
 
 // hopHeaders are Hop-by-hop headers. These are removed when received in a response from
@@ -157,21 +167,44 @@ func parseRequestIDs(response *http.Response, metricHandler *metrics.MetricHandl
 	return requests, nil
 }
 
-func hasVMServiceAccount() bool {
-	if !metadata.OnGCE() {
+// hasVMServiceAccount reports whether the agent is running on a GCE VM that has
+// a default service account.
+//
+// If required is false, this first checks whether the agent is running on GCE
+// at all, and then retries transient metadata server errors for up to
+// vmServiceAccountRetryTimeout.
+//
+// If required is true, this skips the GCE check, which also depends on the
+// network being available and caches its result for the lifetime of the
+// process. It then retries until the service account can be read, so that a
+// metadata server that is temporarily unreachable while the VM is booting
+// cannot cause the agent to permanently omit the VM ID header.
+func hasVMServiceAccount(required bool) bool {
+	if !required && !onGCE() {
 		return false
 	}
 
-	if _, err := metadata.Get("instance/service-accounts/default/email"); err != nil {
-		return false
+	deadline := now().Add(vmServiceAccountRetryTimeout)
+	for retryCount := uint(0); ; retryCount++ {
+		_, err := metadataGet("instance/service-accounts/default/email")
+		if err == nil {
+			return true
+		}
+		log.Printf("failure fetching a VM service account: %v", err)
+		if !required {
+			var notDefined metadata.NotDefinedError
+			if errors.As(err, &notDefined) || !now().Before(deadline) {
+				return false
+			}
+		}
+		backoffSleep(retryCount)
 	}
-	return true
 }
 
 func getVMID(audience string) string {
 	for {
 		idPath := fmt.Sprintf("instance/service-accounts/default/identity?format=full&audience=%s", audience)
-		vmID, err := metadata.Get(idPath)
+		vmID, err := metadataGet(idPath)
 		if err == nil {
 			return vmID
 		}
@@ -203,10 +236,22 @@ func (t *vmTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 // (https://cloud.google.com/compute/docs/instances/verifying-instance-identity), so it if this
 // is not running inside of a Google Compute Engine VM, then it just returns the passed in RoundTripper.
 func RoundTripperWithVMIdentity(ctx context.Context, wrapped http.RoundTripper, proxyURL string, disableGCEVM bool) http.RoundTripper {
-	if !hasVMServiceAccount() || disableGCEVM {
+	if disableGCEVM || !hasVMServiceAccount(false) {
 		return wrapped
 	}
+	return newVMTransport(ctx, wrapped, proxyURL)
+}
 
+// RoundTripperWithRequiredVMIdentity is like RoundTripperWithVMIdentity, except
+// that it always includes a GCE VM ID token. Rather than detecting whether it is
+// running on a GCE VM, it waits until the VM's default service account can be
+// read from the metadata server, retrying indefinitely.
+func RoundTripperWithRequiredVMIdentity(ctx context.Context, wrapped http.RoundTripper, proxyURL string) http.RoundTripper {
+	hasVMServiceAccount(true)
+	return newVMTransport(ctx, wrapped, proxyURL)
+}
+
+func newVMTransport(ctx context.Context, wrapped http.RoundTripper, proxyURL string) http.RoundTripper {
 	transport := &vmTransport{
 		wrapped: wrapped,
 		currID:  getVMID(proxyURL),
