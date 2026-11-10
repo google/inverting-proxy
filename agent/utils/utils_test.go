@@ -29,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	"cloud.google.com/go/compute/metadata"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 )
@@ -678,4 +679,118 @@ func TestExponentialBackoffDurationDoesntOverflow(t *testing.T) {
 
 		prevDuration = i
 	}
+}
+
+func TestHasVMServiceAccount(t *testing.T) {
+	origOnGCE, origMetadataGet, origBackoffSleep, origNow := onGCE, metadataGet, backoffSleep, now
+	defer func() {
+		onGCE, metadataGet, backoffSleep, now = origOnGCE, origMetadataGet, origBackoffSleep, origNow
+	}()
+
+	transientErr := errors.New("dial tcp 169.254.169.254:80: connect: network is unreachable")
+	notDefinedErr := metadata.NotDefinedError("instance/service-accounts/default/email")
+
+	for _, tc := range []struct {
+		name     string
+		required bool
+		isOnGCE  bool
+		// errs are returned by successive metadataGet calls; once exhausted,
+		// metadataGet succeeds.
+		errs []error
+		// sleep is how far the fake clock advances on each backoffSleep call.
+		sleep        time.Duration
+		want         bool
+		wantAttempts int
+		wantRetries  []uint
+	}{
+		{
+			name:         "not_on_gce",
+			isOnGCE:      false,
+			want:         false,
+			wantAttempts: 0,
+		},
+		{
+			name:         "retries_transient_errors",
+			isOnGCE:      true,
+			errs:         []error{transientErr, transientErr, transientErr},
+			sleep:        time.Second,
+			want:         true,
+			wantAttempts: 4,
+			wantRetries:  []uint{0, 1, 2},
+		},
+		{
+			name:         "gives_up_after_timeout",
+			isOnGCE:      true,
+			errs:         []error{transientErr, transientErr, transientErr, transientErr},
+			sleep:        vmServiceAccountRetryTimeout / 2,
+			want:         false,
+			wantAttempts: 3,
+			wantRetries:  []uint{0, 1},
+		},
+		{
+			name:         "does_not_retry_missing_service_account",
+			isOnGCE:      true,
+			errs:         []error{notDefinedErr},
+			sleep:        time.Second,
+			want:         false,
+			wantAttempts: 1,
+		},
+		{
+			name:         "required_skips_gce_check_and_retries_past_timeout",
+			required:     true,
+			isOnGCE:      false,
+			errs:         []error{transientErr, notDefinedErr, transientErr, transientErr},
+			sleep:        vmServiceAccountRetryTimeout,
+			want:         true,
+			wantAttempts: 5,
+			wantRetries:  []uint{0, 1, 2, 3},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var attempts int
+			var retries []uint
+			clock := time.Unix(0, 0)
+			now = func() time.Time { return clock }
+			onGCE = func() bool {
+				if tc.required {
+					t.Error("onGCE() called when the VM identity is required")
+				}
+				return tc.isOnGCE
+			}
+			backoffSleep = func(r uint) {
+				retries = append(retries, r)
+				clock = clock.Add(tc.sleep)
+			}
+			metadataGet = func(suffix string) (string, error) {
+				if got, want := suffix, "instance/service-accounts/default/email"; got != want {
+					t.Fatalf("metadataGet(%q): got suffix %q, want %q", suffix, got, want)
+				}
+				attempts++
+				if attempts <= len(tc.errs) {
+					return "", tc.errs[attempts-1]
+				}
+				return "default@developer.gserviceaccount.com", nil
+			}
+
+			if got := hasVMServiceAccount(tc.required); got != tc.want {
+				t.Errorf("hasVMServiceAccount(%v) = %v, want %v", tc.required, got, tc.want)
+			}
+			if attempts != tc.wantAttempts {
+				t.Errorf("hasVMServiceAccount(%v) attempts = %d, want %d", tc.required, attempts, tc.wantAttempts)
+			}
+			if diff := cmp.Diff(tc.wantRetries, retries); diff != "" {
+				t.Errorf("hasVMServiceAccount(%v) retries diff (-want +got):\n%s", tc.required, diff)
+			}
+		})
+	}
+
+	t.Run("disable_gce_vm_short_circuits", func(t *testing.T) {
+		onGCE = func() bool {
+			t.Fatal("onGCE() called when disableGCEVM is true")
+			return true
+		}
+		if got := RoundTripperWithVMIdentity(context.Background(), http.DefaultTransport, "https://proxy/", true); got != http.DefaultTransport {
+			t.Errorf("RoundTripperWithVMIdentity(..., disableGCEVM=true) = %v, want %v", got, http.DefaultTransport)
+		}
+	})
 }
