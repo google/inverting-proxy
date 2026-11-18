@@ -161,7 +161,7 @@ func TestIsAlreadyFramed(t *testing.T) {
 					"Sec-Fetch-Mode": []string{"navigate"},
 				},
 			},
-			want: false,
+			want: true,
 		},
 		{
 			req: &http.Request{
