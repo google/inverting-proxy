@@ -217,8 +217,9 @@ func pollForNewRequests(pollingCtx context.Context, client *http.Client, hostPro
 			return
 		default:
 			listRequestsCtx, cancel := context.WithTimeout(pollingCtx, *proxyTimeout)
-			defer cancel()
-			if requests, err := utils.ListPendingRequests(listRequestsCtx, client, *proxy, backendID, metricHandler); err != nil {
+			requests, err := utils.ListPendingRequests(listRequestsCtx, client, *proxy, backendID, metricHandler)
+			cancel()
+			if err != nil {
 				log.Printf("Failed to read pending requests: %q\n", err.Error())
 				time.Sleep(utils.ExponentialBackoffDuration(retryCount))
 				retryCount++
